@@ -69,7 +69,7 @@ CPL_C_END
 const double FSHIFT = 0.5;
 // Inverse shift
 const double ISHIFT = 0.5;
-const double OVERSAMPLE_FACTOR=5.0;
+const double OVERSAMPLE_FACTOR=1.3;
 
 /************************************************************************/
 /*                         GeoLocLoadFullData()                         */
@@ -358,10 +358,9 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
             const double dfGLY = psTransform->padfGeoLocY[iXAvg + iYAvg * nXSize];
 
             if( !(psTransform->bHasNoData &&
-                  dfGLX == psTransform->dfNoDataX ) &&
-                (true)
-                // (fabs(dfGLX - psTransform->padfGeoLocX[iX + iY * nXSize]) <= 2 * dfPixelSize ||
-                //  fabs(dfGLY - psTransform->padfGeoLocY[iX + iY * nXSize]) <= 2 * dfPixelSize )
+                  dfGLX == psTransform->dfNoDataX &&
+                  fabs(dfGLX - psTransform->padfGeoLocX[iX + iY * nXSize]) <= 2 * dfPixelSize &&
+                  fabs(dfGLY - psTransform->padfGeoLocY[iX + iY * nXSize]) <= 2 * dfPixelSize )
                 )
             {
                 psTransform->pafBackMapX[iBMX + iBMY * nBMXSize] = fUpdatedBMX;
@@ -459,7 +458,31 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
         }
     }
 
-    // Fill holes in backmap
+    // Check if backmap has holes
+    bool has_holes = false;
+    for( size_t bmY = 0; bmY < nBMYSize; bmY++ ) {
+      size_t max_transitions = 2;
+      if(wgtsBackMap[bmY * nBMXSize] != 0.) {
+        max_transitions = 1;
+      }
+      size_t transitions = 0;
+      for( size_t bmX = 0; bmX < nBMYSize - 1; bmX++ ) {
+        if((wgtsBackMap[bmX + bmY * nBMXSize] != 0. &&
+            wgtsBackMap[bmX + 1 + bmY * nBMXSize] == 0.) ||
+           (wgtsBackMap[bmX + bmY * nBMXSize] == 0. &&
+            wgtsBackMap[bmX + 1 + bmY * nBMXSize] != 0.)) {
+          transitions++;
+        }
+      }
+      if(transitions > max_transitions) {
+          has_holes = true;
+          break;
+      }
+    }
+    fprintf(stderr, "holes: %d\n", has_holes);
+
+    // Fill holes in backmap, if detected
+    if(has_holes) {
     auto poMEMDS = std::unique_ptr<GDALDataset>(
           MEMDataset::Create( "",
                               static_cast<int>(nBMXSize),
@@ -513,37 +536,37 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
 //     }
 // #endif
 
-    // // A final hole filling logic, proceeding line by line, and filling
-    // // holes when the backmap values surrounding the hole are close enough.
-    // for( size_t iBMY = 0; iBMY < nBMYSize; iBMY++ )
-    // {
-    //     size_t iLastValidIX = static_cast<size_t>(-1);
-    //     for( size_t iBMX = 0; iBMX < nBMXSize; iBMX++ )
-    //     {
-    //         const size_t iBM = iBMX + iBMY * nBMXSize;
-    //         if( psTransform->pafBackMapX[iBM] < 0 )
-    //             continue;
-    //         if( iLastValidIX != static_cast<size_t>(-1) &&
-    //             iBMX > iLastValidIX + 1 &&
-    //             fabs( psTransform->pafBackMapX[iBM] -
-    //                 psTransform->pafBackMapX[iLastValidIX + iBMY * nBMXSize]) <= 2 &&
-    //             fabs( psTransform->pafBackMapY[iBM] -
-    //                 psTransform->pafBackMapY[iLastValidIX + iBMY * nBMXSize]) <= 2 )
-    //         {
-    //             for( size_t iBMXInner = iLastValidIX + 1; iBMXInner < iBMX; ++iBMXInner )
-    //             {
-    //                 const float alpha = static_cast<float>(iBMXInner - iLastValidIX) / (iBMX - iLastValidIX);
-    //                 psTransform->pafBackMapX[iBMXInner + iBMY * nBMXSize] =
-    //                     (1.0f - alpha) * psTransform->pafBackMapX[iLastValidIX + iBMY * nBMXSize] +
-    //                     alpha * psTransform->pafBackMapX[iBM];
-    //                 psTransform->pafBackMapY[iBMXInner + iBMY * nBMXSize] =
-    //                     (1.0f - alpha) * psTransform->pafBackMapY[iLastValidIX + iBMY * nBMXSize] +
-    //                     alpha * psTransform->pafBackMapY[iBM];
-    //             }
-    //         }
-    //         iLastValidIX = iBMX;
-    //     }
-    // }
+    // A final hole filling logic, proceeding line by line, and filling
+    // holes when the backmap values surrounding the hole are close enough.
+    for( size_t iBMY = 0; iBMY < nBMYSize; iBMY++ )
+    {
+        size_t iLastValidIX = static_cast<size_t>(-1);
+        for( size_t iBMX = 0; iBMX < nBMXSize; iBMX++ )
+        {
+            const size_t iBM = iBMX + iBMY * nBMXSize;
+            if( psTransform->pafBackMapX[iBM] < 0 )
+                continue;
+            if( iLastValidIX != static_cast<size_t>(-1) &&
+                iBMX > iLastValidIX + 1 &&
+                fabs( psTransform->pafBackMapX[iBM] -
+                    psTransform->pafBackMapX[iLastValidIX + iBMY * nBMXSize]) <= 2 &&
+                fabs( psTransform->pafBackMapY[iBM] -
+                    psTransform->pafBackMapY[iLastValidIX + iBMY * nBMXSize]) <= 2 )
+            {
+                for( size_t iBMXInner = iLastValidIX + 1; iBMXInner < iBMX; ++iBMXInner )
+                {
+                    const float alpha = static_cast<float>(iBMXInner - iLastValidIX) / (iBMX - iLastValidIX);
+                    psTransform->pafBackMapX[iBMXInner + iBMY * nBMXSize] =
+                        (1.0f - alpha) * psTransform->pafBackMapX[iLastValidIX + iBMY * nBMXSize] +
+                        alpha * psTransform->pafBackMapX[iBM];
+                    psTransform->pafBackMapY[iBMXInner + iBMY * nBMXSize] =
+                        (1.0f - alpha) * psTransform->pafBackMapY[iLastValidIX + iBMY * nBMXSize] +
+                        alpha * psTransform->pafBackMapY[iBM];
+                }
+            }
+            iLastValidIX = iBMX;
+        }
+    }
 
 // #ifdef DEBUG_GEOLOC
 //     if( CPLTestBool(CPLGetConfigOption("GEOLOC_DUMP", "NO")) )
@@ -554,6 +577,8 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
                               false, nullptr, nullptr, nullptr));
 //     }
 // #endif
+
+    }
 
     CPLFree( wgtsBackMap );
 
