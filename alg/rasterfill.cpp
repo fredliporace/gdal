@@ -884,6 +884,10 @@ GDALFillNodata( GDALRasterBandH hTargetBand,
 /*      Close and clean up temporary files. Free working buffers        */
 /* -------------------------------------------------------------------- */
 end:
+    GDALFlushCache(hYDS);
+    GDALFlushCache(hValDS);
+    GDALFlushCache(hFiltMaskDS);
+
     CPLFree(panLastY);
     CPLFree(panThisY);
     CPLFree(panTopDownY);
