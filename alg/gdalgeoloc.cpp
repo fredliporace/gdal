@@ -66,10 +66,10 @@ CPL_C_END
 
 //Constants to track down systematic shifts
 // Forward shift
-const double FSHIFT = 0.5;
+const double FSHIFT = 0.0;
 // Inverse shift
-const double ISHIFT = 0.5;
-const double OVERSAMPLE_FACTOR=1.3;
+const double ISHIFT = 0.0;
+const double OVERSAMPLE_FACTOR=3.0;
 
 /************************************************************************/
 /*                         GeoLocLoadFullData()                         */
@@ -224,6 +224,15 @@ static bool GeoLocLoadFullData( GDALGeoLocTransformInfo *psTransform )
 }
 
 /************************************************************************/
+/*      macro for cross product                                         */
+/************************************************************************/
+
+inline double CROSS(const double& dAX, const double& dAY,
+                  const double& dBX, const double& dBY) {
+  return dAX * dBY - dAY * dBX;
+}
+
+/************************************************************************/
 /*                       GeoLocGenerateBackMap()                        */
 /************************************************************************/
 
@@ -242,13 +251,12 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
 
     // Lower bound for pixel target to guarantee that the backmap pixel size
     // is not greater than the original pixel size in neither X and Y
-    const double nMinPixelSize = std::min((psTransform->dfMaxX - psTransform->dfMinX) / nXSize,
+    const double dfMinPixelSize = std::min((psTransform->dfMaxX - psTransform->dfMinX) / nXSize,
                                           (psTransform->dfMaxY - psTransform->dfMinY) / nYSize) / OVERSAMPLE_FACTOR;
     const double dfTargetPixels =
       (psTransform->dfMaxX - psTransform->dfMinX) *
-      (psTransform->dfMaxY - psTransform->dfMinY) / (nMinPixelSize * nMinPixelSize);
-    fprintf(stderr, "%6.3f", dfTargetPixels / (static_cast<double>(nXSize) * nYSize));
-      //const double dfTargetPixels = (static_cast<double>(nXSize) * nYSize * OVERSAMPLE_FACTOR);
+      (psTransform->dfMaxY - psTransform->dfMinY) / (dfMinPixelSize * dfMinPixelSize);
+    fprintf(stderr, "%6.3f\n", dfTargetPixels / (static_cast<double>(nXSize) * nYSize));
     const double dfPixelSize = sqrt(
         (psTransform->dfMaxX - psTransform->dfMinX) *
         (psTransform->dfMaxY - psTransform->dfMinY) / dfTargetPixels);
@@ -283,8 +291,13 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
     psTransform->nBackMapHeight = nBMYSize;
 
     // Get corner
-    const double dfMinX = psTransform->dfMinX - dfPixelSize / 2.0;
-    const double dfMaxY = psTransform->dfMaxY + dfPixelSize / 2.0;
+    // Commenting out since in our case the coordinate is associated with
+    // the pixel center.
+    // ?? check geoloc array for documentation on convention
+    // const double dfMinX = psTransform->dfMinX - dfPixelSize / 2.0;
+    // const double dfMaxY = psTransform->dfMaxY + dfPixelSize / 2.0;
+    const double dfMinX = psTransform->dfMinX;
+    const double dfMaxY = psTransform->dfMaxY;
 
     psTransform->adfBackMapGeoTransform[0] = dfMinX;
     psTransform->adfBackMapGeoTransform[1] = dfPixelSize;
@@ -319,6 +332,127 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
         psTransform->pafBackMapY[i] = 0;
         wgtsBackMap[i] = 0.0;
     }
+
+    // thanks to Inigo Quilez
+    // https://www.iquilezles.org/www/articles/ibilinear/ibilinear.htm
+    // iX, iY: geolocation array coordinate for upper left polygon point
+    // dPX, dPY: coordinate for inverse interpolation
+    // dPU, dPV: result is returned here
+    const auto InverseBilinear = [&](size_t iX, size_t iY,
+                                     double dPX, double dPY,
+                                     float& dPU, float& dPV) {
+      //coordinates for quadrileteral corners
+      const double dAX = psTransform->padfGeoLocX[iX + iY * nXSize];
+      const double dAY = psTransform->padfGeoLocY[iX + iY * nXSize];
+      const double dBX = psTransform->padfGeoLocX[iX + 1 + iY * nXSize];
+      const double dBY = psTransform->padfGeoLocY[iX + 1 + iY * nXSize];
+      const double dCX = psTransform->padfGeoLocX[iX + 1 + (iY + 1) * nXSize];
+      const double dCY = psTransform->padfGeoLocY[iX + 1 + (iY + 1) * nXSize];
+      const double dDX = psTransform->padfGeoLocX[iX + (iY + 1) * nXSize];
+      const double dDY = psTransform->padfGeoLocY[iX + (iY + 1) * nXSize];
+
+      // intermediate variables
+      const double dEX = dBX - dAX;
+      const double dEY = dBY - dAY;
+      const double dFX = dDX - dAX;
+      const double dFY = dDY - dAY;
+      const double dGX = dAX - dBX + dCX - dDX;
+      const double dGY = dAY - dBY + dCY - dDY;
+      const double dHX = dPX - dAX;
+      const double dHY = dPY - dAY;
+
+      const double k2 = CROSS(dGX, dGY, dFX, dFY);
+      const double k1 = CROSS(dEX, dEY, dFX, dFY) + CROSS(dHX, dHY, dGX, dGY);
+      const double k0 = CROSS(dHX, dHY, dEX, dEY);
+
+      // if edges are parallel this is a linear equation
+      // TODO: check tolerance
+      if(fabs(k2) < .001) {
+        dPU = (dHX * k1 + dFX * k0) / (dEX * k1 - dGX * k0);
+        dPV = -k0/k1;
+      } else {
+        double w = k1 * k1 - 4. * k0 * k2;
+        if( w < 0.) {
+          fprintf(stderr, "w is imaginary\n");
+        }
+        w = sqrt(w);
+        const double ik2 = 0.5 / k2;
+        dPV = (-k1 - w) * ik2;
+        dPU = (dHX - dFX * dPV) / (dEX + dGX * dPV);
+        if( (dPU < 0.0) || (dPU > 1.0) || (dPV < 0.0) || (dPV > 1.0) ) {
+          dPV = (-k1 + w) * ik2;
+          dPU = (dHX - dFX * dPV) / (dEX + dGX * dPV);
+        }
+      }
+    };
+
+    // iBMX, iBMX: backmap integer coordinate
+    // dX, dY: backmap iBMX, iBMY geo coordinate
+    // iX, iY: geolocation array coordinate for upper left polygon point
+    const auto PointInsideConvexPolygon = [&](const std::ptrdiff_t iBMX,
+                                              const std::ptrdiff_t iBMY,
+                                              double dX, double dY,
+                                              size_t iX, size_t iY) {
+      // -1 for undefined, 0 for left, 1 for right
+      int previous_side = -1;
+      size_t iNextX;
+      size_t iNextY;
+      for(int n = 0, iThisX = iX, iThisY = iY; n < 4; n++) {
+        switch(n) {
+        case 0:
+          iNextX = iX + 1;
+          iNextY = iY;
+          break;
+        case 1:
+          iNextX = iX + 1;
+          iNextY = iY + 1;
+          break;
+        case 2:
+          iNextX = iX;
+          iNextY = iY + 1;
+          break;
+        case 3:
+          iNextX = iX;
+          iNextY = iY;
+          break;
+        }
+        // Check A-B segment
+        const double dAX = psTransform->padfGeoLocX[iThisX + iThisY * nXSize];
+        const double dAY = psTransform->padfGeoLocY[iThisX + iThisY * nXSize];
+        const double dBX = psTransform->padfGeoLocX[iNextX + iNextY * nXSize];
+        const double dBY = psTransform->padfGeoLocY[iNextX + iNextY * nXSize];
+        const double dAffineSegmentX = dBX - dAX;
+        const double dAffineSegmentY = dBY - dAY;
+        const double dAffinePointX = dX - dAX;
+        const double dAffinePointY = dY - dAY;
+        const double dCosineSign = dAffineSegmentX * dAffinePointY - dAffineSegmentY * dAffinePointX;
+        int current_side;
+        if( dCosineSign == 0.0 ) {
+          // Point over the edge, considered at the same side as the previous
+          current_side = previous_side;
+        } else {
+          current_side = dCosineSign < 0 ? 0 : 1;
+        }
+        if(previous_side == -1) {
+            previous_side = current_side;
+        }
+        if(previous_side != current_side) {
+          return false;
+        }
+        iThisX = iNextX;
+        iThisY = iNextY;
+      }
+      // Update backmap
+      InverseBilinear(iX, iY,
+                      dX, dY,
+                      psTransform->pafBackMapX[iBMX + iBMY * nBMXSize],
+                      psTransform->pafBackMapY[iBMX + iBMY * nBMXSize]);
+      // TODO bilinear iterpolation
+      // psTransform->pafBackMapX[iBMX + iBMY * nBMXSize] = iX;
+      // psTransform->pafBackMapY[iBMX + iBMY * nBMXSize] = iY;
+      wgtsBackMap[iBMX + iBMY * nBMXSize] = 1.0;
+      return true;
+    };
 
 /* -------------------------------------------------------------------- */
 /*      Run through the whole geoloc array forward projecting and       */
@@ -370,6 +504,7 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
         }
     };
 
+    // for each pixel in the geolocation array...
     for( size_t iY = 0; iY < nYSize; iY++ )
     {
         for( size_t iX = 0; iX < nXSize; iX++ )
@@ -381,58 +516,94 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
 
             const size_t i = iX + iY * nXSize;
 
+            // fractional (dcolumn, dline) in backmap associated with integer (ncolumn, nline) in
+            // geolocation array.
             const double dBMX = static_cast<double>(
                     (psTransform->padfGeoLocX[i] - dfMinX) / dfPixelSize) - FSHIFT;
-
             const double dBMY = static_cast<double>(
                 (dfMaxY - psTransform->padfGeoLocY[i]) / dfPixelSize) - FSHIFT;
 
-
-            //Get top left index by truncation
-            const std::ptrdiff_t iBMX = static_cast<std::ptrdiff_t>(dBMX);
-            const std::ptrdiff_t iBMY = static_cast<std::ptrdiff_t>(dBMY);
+            //Get nearest integer backmap column, line
+            const std::ptrdiff_t iBMX = static_cast<std::ptrdiff_t>(dBMX + .5);
+            const std::ptrdiff_t iBMY = static_cast<std::ptrdiff_t>(dBMY + .5);
             const double fracBMX = dBMX - iBMX;
             const double fracBMY = dBMY - iBMY;
 
-            //Check if the center is in range
-            if( iBMX < -1 || iBMY < -1 ||
-                (iBMX > 0 && static_cast<size_t>(iBMX) > nBMXSize) ||
-                (iBMY > 0 && static_cast<size_t>(iBMY) > nBMYSize) )
+            //Check if l,c is in range
+            if( iBMX < 0 || iBMY < 0 ||
+                (static_cast<size_t>(iBMX) >= nBMXSize) ||
+                (static_cast<size_t>(iBMY) >= nBMYSize) )
                 continue;
 
+            bool is_inside = false;
+            //Check if we have the correct neighbors
             //Check logic for top left pixel
             if ((iBMX >= 0) && (iBMY >= 0) &&
                 (static_cast<size_t>(iBMX) < nBMXSize) &&
                 (static_cast<size_t>(iBMY) < nBMYSize))
             {
-                const double tempwt = (1.0 - fracBMX) * (1.0 - fracBMY);
-                UpdateBackmap(iBMX, iBMY, iX, iY, tempwt);
+              // Check if inside polygon starting at iBMX, iBMY
+              is_inside = PointInsideConvexPolygon(iBMX, iBMY,
+                                                   psTransform->dfMinX + iBMX * dfPixelSize,
+                                                   psTransform->dfMaxY - iBMY * dfPixelSize,
+                                                   iX, iY);
+              if(is_inside) {
+                fprintf(stderr, "0, 0\n");
+              }
+                // const double tempwt = (1.0 - fracBMX) * (1.0 - fracBMY);
+                // UpdateBackmap(iBMX, iBMY, iX, iY, tempwt);
             }
 
             //Check logic for top right pixel
-            if ((iBMY >= 0) &&
-                (static_cast<size_t>(iBMX+1) < nBMXSize) &&
+            if ((iBMY >= 0) && (!is_inside) && (iX > 0) &&
+                (static_cast<size_t>(iBMX-1) < nBMXSize) &&
                 (static_cast<size_t>(iBMY) < nBMYSize))
             {
-                const double tempwt = fracBMX * (1.0 - fracBMY);
-                UpdateBackmap(iBMX + 1, iBMY, iX, iY, tempwt);
+              is_inside = PointInsideConvexPolygon(iBMX, iBMY,
+                                                   psTransform->dfMinX + iBMX * dfPixelSize,
+                                                   psTransform->dfMaxY - iBMY * dfPixelSize,
+                                                   iX - 1, iY);
+              if(is_inside) {
+                fprintf(stderr, "-1, 0\n");
+              }
+                // const double tempwt = fracBMX * (1.0 - fracBMY);
+                // UpdateBackmap(iBMX + 1, iBMY, iX, iY, tempwt);
             }
 
             //Check logic for bottom right pixel
-            if ((static_cast<size_t>(iBMX+1) < nBMXSize) &&
-                (static_cast<size_t>(iBMY+1) < nBMYSize))
+            if ((!is_inside) && (iX > 0) && (iY > 0) &&
+                (static_cast<size_t>(iBMX-1) < nBMXSize) &&
+                (static_cast<size_t>(iBMY-1) < nBMYSize))
             {
-                const double tempwt = fracBMX * fracBMY;
-                UpdateBackmap(iBMX + 1, iBMY + 1, iX, iY, tempwt);
+              is_inside = PointInsideConvexPolygon(iBMX, iBMY,
+                                                   psTransform->dfMinX + iBMX * dfPixelSize,
+                                                   psTransform->dfMaxY - iBMY * dfPixelSize,
+                                                   iX - 1, iY - 1);
+              if(is_inside) {
+                fprintf(stderr, "-1, -1\n");
+              }
+                // const double tempwt = fracBMX * fracBMY;
+                // UpdateBackmap(iBMX + 1, iBMY + 1, iX, iY, tempwt);
             }
 
             //Check logic for bottom left pixel
-            if ((iBMX >= 0) &&
+            if ((iBMX >= 0) && (!is_inside) && (iY > 0) &&
                 (static_cast<size_t>(iBMX) < nBMXSize) &&
-                (static_cast<size_t>(iBMY+1) < nBMYSize))
+                (static_cast<size_t>(iBMY-1) < nBMYSize))
             {
-                const double tempwt = (1.0 - fracBMX) * fracBMY;
-                UpdateBackmap(iBMX, iBMY + 1, iX, iY, tempwt);
+              is_inside = PointInsideConvexPolygon(iBMX, iBMY,
+                                                   psTransform->dfMinX + iBMX * dfPixelSize,
+                                                   psTransform->dfMaxY - iBMY * dfPixelSize,
+                                                   iX, iY - 1);
+              if(is_inside) {
+                fprintf(stderr, "0, -1\n");
+              }
+
+                // const double tempwt = (1.0 - fracBMX) * fracBMY;
+                // UpdateBackmap(iBMX, iBMY + 1, iX, iY, tempwt);
+            }
+            if(!is_inside) {
+              fprintf(stderr, "Internal error\n");
             }
 
         }
@@ -481,8 +652,6 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
     }
     fprintf(stderr, "holes: %d\n", has_holes);
 
-    // Fill holes in backmap, if detected
-    if(has_holes) {
     auto poMEMDS = std::unique_ptr<GDALDataset>(
           MEMDataset::Create( "",
                               static_cast<int>(nBMXSize),
@@ -512,7 +681,8 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
 //    }
 // #endif
 
-    constexpr double dfMaxSearchDist = 1.0;
+    if(false) {
+    constexpr double dfMaxSearchDist = 3.0;
     constexpr int nSmoothingIterations = 0;
     for( int i = 1; i <= 2; i++ )
     {
