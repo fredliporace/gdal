@@ -29,6 +29,7 @@
  ****************************************************************************/
 
 #include "cpl_port.h"
+#include "cpl_error.h"
 #include "gdal_alg.h"
 #include "gdal_alg_priv.h"
 
@@ -69,7 +70,7 @@ CPL_C_END
 const double FSHIFT = 0.0;
 // Inverse shift
 const double ISHIFT = 0.0;
-const double OVERSAMPLE_FACTOR=3.0;
+const double OVERSAMPLE_FACTOR=1.3;
 
 /************************************************************************/
 /*                         GeoLocLoadFullData()                         */
@@ -335,7 +336,7 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
 
     // thanks to Inigo Quilez
     // https://www.iquilezles.org/www/articles/ibilinear/ibilinear.htm
-    // iX, iY: geolocation array coordinate for upper left polygon point
+    // iX, iY: geolocation array l,c for upper left polygon point
     // dPX, dPY: coordinate for inverse interpolation
     // dPU, dPV: result is returned here
     const auto InverseBilinear = [&](size_t iX, size_t iY,
@@ -384,6 +385,10 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
           dPU = (dHX - dFX * dPV) / (dEX + dGX * dPV);
         }
       }
+      dPU = static_cast<float>(iX) + dPU;
+      dPV = static_cast<float>(iY) + dPV;
+      CPLAssert(dPU < nXSize);
+      CPLAssert(dPV < nYSize);
     };
 
     // iBMX, iBMX: backmap integer coordinate
@@ -454,56 +459,6 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
       return true;
     };
 
-/* -------------------------------------------------------------------- */
-/*      Run through the whole geoloc array forward projecting and       */
-/*      pushing into the backmap.                                       */
-/* -------------------------------------------------------------------- */
-
-    const auto UpdateBackmap = [&](std::ptrdiff_t iBMX, std::ptrdiff_t iBMY,
-                                   size_t iX, size_t iY,
-                                   double tempwt)
-    {
-        const float fUpdatedBMX = psTransform->pafBackMapX[iBMX + iBMY * nBMXSize] +
-            static_cast<float>( tempwt * (
-                (iX + FSHIFT) * psTransform->dfPIXEL_STEP +
-                psTransform->dfPIXEL_OFFSET));
-        const float fUpdatedBMY = psTransform->pafBackMapY[iBMX + iBMY * nBMXSize] +
-            static_cast<float>( tempwt * (
-                (iY + FSHIFT) * psTransform->dfLINE_STEP +
-                psTransform->dfLINE_OFFSET));
-        const float fUpdatedWeight = wgtsBackMap[iBMX + iBMY * nBMXSize] +
-                               static_cast<float>(tempwt);
-
-        // Only update the backmap if the updated averaged value results in a
-        // geoloc position that isn't too different from the original one.
-        // (there's no guarantee that if padfGeoLocX[i] ~= padfGeoLoc[j],
-        //  padfGeoLoc[alpha * i + (1 - alpha) * j] ~= padfGeoLoc[i] )
-        if( fUpdatedWeight > 0 )
-        {
-            const float fX = fUpdatedBMX / fUpdatedWeight;
-            const float fY = fUpdatedBMY / fUpdatedWeight;
-            const double dfGeoLocPixel = (fX - psTransform->dfPIXEL_OFFSET) / psTransform->dfPIXEL_STEP;
-            const double dfGeoLocLine = (fY - psTransform->dfLINE_OFFSET) / psTransform->dfLINE_STEP;
-            size_t iXAvg = static_cast<size_t>(std::max(0.0, dfGeoLocPixel));
-            iXAvg = std::min(iXAvg, psTransform->nGeoLocXSize-1);
-            size_t iYAvg = static_cast<size_t>(std::max(0.0, dfGeoLocLine));
-            iYAvg = std::min(iYAvg, psTransform->nGeoLocYSize-1);
-            const double dfGLX = psTransform->padfGeoLocX[iXAvg + iYAvg * nXSize];
-            const double dfGLY = psTransform->padfGeoLocY[iXAvg + iYAvg * nXSize];
-
-            if( !(psTransform->bHasNoData &&
-                  dfGLX == psTransform->dfNoDataX &&
-                  fabs(dfGLX - psTransform->padfGeoLocX[iX + iY * nXSize]) <= 2 * dfPixelSize &&
-                  fabs(dfGLY - psTransform->padfGeoLocY[iX + iY * nXSize]) <= 2 * dfPixelSize )
-                )
-            {
-                psTransform->pafBackMapX[iBMX + iBMY * nBMXSize] = fUpdatedBMX;
-                psTransform->pafBackMapY[iBMX + iBMY * nBMXSize] = fUpdatedBMY;
-                wgtsBackMap[iBMX + iBMY * nBMXSize] = fUpdatedWeight;
-            }
-        }
-    };
-
     // for each pixel in the geolocation array...
     for( size_t iY = 0; iY < nYSize; iY++ )
     {
@@ -526,8 +481,6 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
             //Get nearest integer backmap column, line
             const std::ptrdiff_t iBMX = static_cast<std::ptrdiff_t>(dBMX + .5);
             const std::ptrdiff_t iBMY = static_cast<std::ptrdiff_t>(dBMY + .5);
-            const double fracBMX = dBMX - iBMX;
-            const double fracBMY = dBMY - iBMY;
 
             //Check if l,c is in range
             if( iBMX < 0 || iBMY < 0 ||
@@ -535,97 +488,48 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
                 (static_cast<size_t>(iBMY) >= nBMYSize) )
                 continue;
 
-            bool is_inside = false;
-            //Check if we have the correct neighbors
-            //Check logic for top left pixel
-            if ((iBMX >= 0) && (iBMY >= 0) &&
-                (static_cast<size_t>(iBMX) < nBMXSize) &&
-                (static_cast<size_t>(iBMY) < nBMYSize))
-            {
-              // Check if inside polygon starting at iBMX, iBMY
-              is_inside = PointInsideConvexPolygon(iBMX, iBMY,
-                                                   psTransform->dfMinX + iBMX * dfPixelSize,
-                                                   psTransform->dfMaxY - iBMY * dfPixelSize,
-                                                   iX, iY);
-              if(is_inside) {
-                fprintf(stderr, "0, 0\n");
+            bool bIsInside = false;
+            const int iSearchSpace = 2;
+            for(int iSX = -iSearchSpace; (iSX <= iSearchSpace) && (!bIsInside); iSX++) {
+              for(int iSY = -iSearchSpace; iSY <= iSearchSpace; iSY++) {
+                int iCX = static_cast<int>(iX) + iSX;
+                int iCY = static_cast<int>(iY) + iSY;
+                if((iCX < 0) || (iCY < 0)) {
+                  continue;
+                }
+                // Candidate must be a valid upper left corner
+                if((iCX > static_cast<int>(nXSize) - 2) || (iCY > static_cast<int>(nYSize) - 2)) {
+                  continue;
+                }
+                bIsInside = PointInsideConvexPolygon(iBMX, iBMY,
+                                                     psTransform->dfMinX + iBMX * dfPixelSize,
+                                                     psTransform->dfMaxY - iBMY * dfPixelSize,
+                                                     static_cast<size_t>(iCX), static_cast<size_t>(iCY));
+                if(bIsInside) {
+                  fprintf(stderr, "%d, %d\n", iSX, iSY);
+                  break;
+                }
               }
-                // const double tempwt = (1.0 - fracBMX) * (1.0 - fracBMY);
-                // UpdateBackmap(iBMX, iBMY, iX, iY, tempwt);
             }
 
-            //Check logic for top right pixel
-            if ((iBMY >= 0) && (!is_inside) && (iX > 0) &&
-                (static_cast<size_t>(iBMX-1) < nBMXSize) &&
-                (static_cast<size_t>(iBMY) < nBMYSize))
-            {
-              is_inside = PointInsideConvexPolygon(iBMX, iBMY,
-                                                   psTransform->dfMinX + iBMX * dfPixelSize,
-                                                   psTransform->dfMaxY - iBMY * dfPixelSize,
-                                                   iX - 1, iY);
-              if(is_inside) {
-                fprintf(stderr, "-1, 0\n");
-              }
-                // const double tempwt = fracBMX * (1.0 - fracBMY);
-                // UpdateBackmap(iBMX + 1, iBMY, iX, iY, tempwt);
-            }
-
-            //Check logic for bottom right pixel
-            if ((!is_inside) && (iX > 0) && (iY > 0) &&
-                (static_cast<size_t>(iBMX-1) < nBMXSize) &&
-                (static_cast<size_t>(iBMY-1) < nBMYSize))
-            {
-              is_inside = PointInsideConvexPolygon(iBMX, iBMY,
-                                                   psTransform->dfMinX + iBMX * dfPixelSize,
-                                                   psTransform->dfMaxY - iBMY * dfPixelSize,
-                                                   iX - 1, iY - 1);
-              if(is_inside) {
-                fprintf(stderr, "-1, -1\n");
-              }
-                // const double tempwt = fracBMX * fracBMY;
-                // UpdateBackmap(iBMX + 1, iBMY + 1, iX, iY, tempwt);
-            }
-
-            //Check logic for bottom left pixel
-            if ((iBMX >= 0) && (!is_inside) && (iY > 0) &&
-                (static_cast<size_t>(iBMX) < nBMXSize) &&
-                (static_cast<size_t>(iBMY-1) < nBMYSize))
-            {
-              is_inside = PointInsideConvexPolygon(iBMX, iBMY,
-                                                   psTransform->dfMinX + iBMX * dfPixelSize,
-                                                   psTransform->dfMaxY - iBMY * dfPixelSize,
-                                                   iX, iY - 1);
-              if(is_inside) {
-                fprintf(stderr, "0, -1\n");
-              }
-
-                // const double tempwt = (1.0 - fracBMX) * fracBMY;
-                // UpdateBackmap(iBMX, iBMY + 1, iX, iY, tempwt);
-            }
-            if(!is_inside) {
-              fprintf(stderr, "Internal error\n");
+            if(!bIsInside) {
+              fprintf(stderr, "Point not inside\n");
+              psTransform->pafBackMapX[iBMX + iBMY * nBMXSize] = 0;
+              psTransform->pafBackMapY[iBMX + iBMY * nBMXSize] = 0;
             }
 
         }
     }
 
 
-    //Each pixel in the backmap may have multiple entries.
+    //Backmap pixels not visited are set to no_data (-1.0)
     //We now go in average it out using the weights
     for( size_t i = 0; i < nBMXYCount; i++ )
     {
-        //Check if pixel was only touch during neighbor scan
-        //But no real weight was added as source point matched
-        //backmap grid node
-        if (wgtsBackMap[i] > 0)
+        if (wgtsBackMap[i] == 0.0)
         {
-            psTransform->pafBackMapX[i] /= wgtsBackMap[i];
-            psTransform->pafBackMapY[i] /= wgtsBackMap[i];
-        }
-        else
-        {
-            psTransform->pafBackMapX[i] = -1.0f;
-            psTransform->pafBackMapY[i] = -1.0f;
+          psTransform->pafBackMapX[i] = -1.0f;
+          psTransform->pafBackMapY[i] = -1.0f;
         }
     }
 
@@ -681,20 +585,19 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
 //    }
 // #endif
 
-    if(false) {
-    constexpr double dfMaxSearchDist = 3.0;
-    constexpr int nSmoothingIterations = 0;
-    for( int i = 1; i <= 2; i++ )
-    {
-        GDALFillNodata( GDALRasterBand::ToHandle(poMEMDS->GetRasterBand(i)),
-                        nullptr,
-                        dfMaxSearchDist,
-                        0, // unused parameter
-                        nSmoothingIterations,
-                        nullptr,
-                        nullptr,
-                        nullptr );
-    }
+    // constexpr double dfMaxSearchDist = 3.0;
+    // constexpr int nSmoothingIterations = 0;
+    // for( int i = 1; i <= 2; i++ )
+    // {
+    //     GDALFillNodata( GDALRasterBand::ToHandle(poMEMDS->GetRasterBand(i)),
+    //                     nullptr,
+    //                     dfMaxSearchDist,
+    //                     0, // unused parameter
+    //                     nSmoothingIterations,
+    //                     nullptr,
+    //                     nullptr,
+    //                     nullptr );
+    // }
 
 // #ifdef DEBUG_GEOLOC
 //     if( CPLTestBool(CPLGetConfigOption("GEOLOC_DUMP", "NO")) )
@@ -706,8 +609,8 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
 //     }
 // #endif
 
-    // A final hole filling logic, proceeding line by line, and filling
-    // holes when the backmap values surrounding the hole are close enough.
+    //A final hole filling logic, proceeding line by line, and filling
+    //holes when the backmap values surrounding the hole are close enough.
     for( size_t iBMY = 0; iBMY < nBMYSize; iBMY++ )
     {
         size_t iLastValidIX = static_cast<size_t>(-1);
@@ -747,8 +650,6 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
                               false, nullptr, nullptr, nullptr));
 //     }
 // #endif
-
-    }
 
     CPLFree( wgtsBackMap );
 
