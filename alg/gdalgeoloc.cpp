@@ -58,18 +58,6 @@ CPLXMLNode *GDALSerializeGeoLocTransformer( void *pTransformArg );
 void *GDALDeserializeGeoLocTransformer( CPLXMLNode *psTree );
 CPL_C_END
 
-/************************************************************************/
-/* ==================================================================== */
-/*                         GDALGeoLocTransformer                        */
-/* ==================================================================== */
-/************************************************************************/
-
-
-//Constants to track down systematic shifts
-// Forward shift
-const double FSHIFT = 0.0;
-// Inverse shift
-const double ISHIFT = 0.0;
 const double OVERSAMPLE_FACTOR=1.3;
 
 /************************************************************************/
@@ -317,32 +305,47 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
 
     float *wgtsBackMap = static_cast<float *>(
         VSI_MALLOC3_VERBOSE(nBMXSize, nBMYSize, sizeof(float)));
+    // for each backmap pixel this stores the original pixel
+    // used as upper left corner for the cell used to interpolate
+    // the backmap value. -1 is used as no data
+    int *iUpperLeftX = static_cast<int *>(
+        VSI_MALLOC3_VERBOSE(nBMXSize, nBMYSize, sizeof(int)));
+    int *iUpperLeftY = static_cast<int *>(
+        VSI_MALLOC3_VERBOSE(nBMXSize, nBMYSize, sizeof(int)));
 
     if( psTransform->pafBackMapX == nullptr ||
         psTransform->pafBackMapY == nullptr ||
-        wgtsBackMap == nullptr)
+        wgtsBackMap == nullptr || iUpperLeftX == nullptr || iUpperLeftY == nullptr )
     {
-        CPLFree( wgtsBackMap );
-        return false;
+      CPLFree(iUpperLeftX);
+      CPLFree(iUpperLeftY);
+      CPLFree( wgtsBackMap );
+      return false;
     }
 
+    const float fBMNodata = -10.;
     const size_t nBMXYCount = nBMXSize * nBMYSize;
     for( size_t i = 0; i < nBMXYCount; i++ )
     {
-        psTransform->pafBackMapX[i] = 0;
-        psTransform->pafBackMapY[i] = 0;
+      // TODO: we could use a no data value fot this
+        psTransform->pafBackMapX[i] = fBMNodata;
+        psTransform->pafBackMapY[i] = fBMNodata;
         wgtsBackMap[i] = 0.0;
+        iUpperLeftX[i] = -1;
+        iUpperLeftY[i] = -1;
     }
 
     // thanks to Inigo Quilez
     // https://www.iquilezles.org/www/articles/ibilinear/ibilinear.htm
+    // See also
+    // https://stackoverflow.com/q/808441/1259982
     // iX, iY: geolocation array l,c for upper left polygon point
     // dPX, dPY: coordinate for inverse interpolation
     // dPU, dPV: result is returned here
     const auto InverseBilinear = [&](size_t iX, size_t iY,
                                      double dPX, double dPY,
                                      float& dPU, float& dPV) {
-      //coordinates for quadrileteral corners
+      //coordinates for quadrilateral corners
       const double dAX = psTransform->padfGeoLocX[iX + iY * nXSize];
       const double dAY = psTransform->padfGeoLocY[iX + iY * nXSize];
       const double dBX = psTransform->padfGeoLocX[iX + 1 + iY * nXSize];
@@ -368,14 +371,13 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
 
       // if edges are parallel this is a linear equation
       // TODO: check tolerance
-      if(fabs(k2) < .001) {
+      if(fabs(k2) < 1e-10) {
         dPU = (dHX * k1 + dFX * k0) / (dEX * k1 - dGX * k0);
         dPV = -k0/k1;
       } else {
         double w = k1 * k1 - 4. * k0 * k2;
-        if( w < 0.) {
-          fprintf(stderr, "w is imaginary\n");
-        }
+        // w can't be imaginary
+        CPLAssert( w >= 0.);
         w = sqrt(w);
         const double ik2 = 0.5 / k2;
         dPV = (-k1 - w) * ik2;
@@ -391,6 +393,7 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
       CPLAssert(dPV < nYSize);
     };
 
+    // See https://stackoverflow.com/a/1119673/1259982
     // iBMX, iBMX: backmap integer coordinate
     // dX, dY: backmap iBMX, iBMY geo coordinate
     // iX, iY: geolocation array coordinate for upper left polygon point
@@ -448,14 +451,33 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
         iThisY = iNextY;
       }
       // Update backmap
+      size_t i(iBMX + iBMY * nBMXSize);
+      float previousX = psTransform->pafBackMapX[i];
+      float previousY = psTransform->pafBackMapY[i];
+      int previousULX = iUpperLeftX[i];
+      int previousULY = iUpperLeftY[i];
       InverseBilinear(iX, iY,
                       dX, dY,
-                      psTransform->pafBackMapX[iBMX + iBMY * nBMXSize],
-                      psTransform->pafBackMapY[iBMX + iBMY * nBMXSize]);
-      // TODO bilinear iterpolation
-      // psTransform->pafBackMapX[iBMX + iBMY * nBMXSize] = iX;
-      // psTransform->pafBackMapY[iBMX + iBMY * nBMXSize] = iY;
-      wgtsBackMap[iBMX + iBMY * nBMXSize] = 1.0;
+                      psTransform->pafBackMapX[i],
+                      psTransform->pafBackMapY[i]);
+      iUpperLeftX[i] = iX;
+      iUpperLeftY[i] = iY;
+      wgtsBackMap[i] = 1.0;
+      // TODO checking X only should suffice
+      if((previousX != fBMNodata ||
+          previousY != fBMNodata) &&
+         (previousULX != iUpperLeftX[i] || previousULY != iUpperLeftY[i])) {
+        // We already have visited this BM pixel, make sure that the values
+        // match. The upperLeft corner may change for values classified
+        // as in the border but the interpolated result should be the same
+        // CPLAssert(previousX == psTransform->pafBackMapX[i] &&
+        //           previousY == psTransform->pafBackMapY[i]);
+        fprintf(stderr, "Precision: [%d,%d](%f, %f) -> [%d,%d](%f, %f)\n",
+                previousULX, previousULY,
+                previousX, previousY,
+                iUpperLeftX[i], iUpperLeftY[i],
+                psTransform->pafBackMapX[i], psTransform->pafBackMapY[i]);
+      };
       return true;
     };
 
@@ -474,9 +496,9 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
             // fractional (dcolumn, dline) in backmap associated with integer (ncolumn, nline) in
             // geolocation array.
             const double dBMX = static_cast<double>(
-                    (psTransform->padfGeoLocX[i] - dfMinX) / dfPixelSize) - FSHIFT;
+                    (psTransform->padfGeoLocX[i] - dfMinX) / dfPixelSize);
             const double dBMY = static_cast<double>(
-                (dfMaxY - psTransform->padfGeoLocY[i]) / dfPixelSize) - FSHIFT;
+                (dfMaxY - psTransform->padfGeoLocY[i]) / dfPixelSize);
 
             //Get nearest integer backmap column, line
             const std::ptrdiff_t iBMX = static_cast<std::ptrdiff_t>(dBMX + .5);
@@ -506,16 +528,38 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
                                                      psTransform->dfMaxY - iBMY * dfPixelSize,
                                                      static_cast<size_t>(iCX), static_cast<size_t>(iCY));
                 if(bIsInside) {
-                  fprintf(stderr, "%d, %d\n", iSX, iSY);
+                  //fprintf(stderr, "Found (%ld,%ld) - (%ld,%ld) - (%d, %d)\n", iBMX, iBMY, iX, iY, iSX, iSY);
+                  // if((iX == 13 && iY == 33) || (iX == 13 && iY == 32)) {
+                  //   fprintf(stderr, "Here\n");
+                  // }
+                  //Now that we have a BM pixel and its cell we visit the neighboring
+                  //BM pixels and fill them if inside the same cell.
+                  const int iDeltaSearchSpace = 2;
+                  for(int iDeltaX = -iDeltaSearchSpace; iDeltaX <= iDeltaSearchSpace; iDeltaX++) {
+                    for(int iDeltaY = -iDeltaSearchSpace; iDeltaY <= iDeltaSearchSpace; iDeltaY++) {
+                      // we skip the current BM pixel
+                      if(iDeltaX == 0 && iDeltaY == 0) {
+                        continue;
+                      }
+                      if((iBMX + iDeltaX < 0) || (iBMY + iDeltaY < 0) ||
+                         (static_cast<size_t>(iBMX + iDeltaX + 1) > nBMXSize) ||
+                         (static_cast<size_t>(iBMY + iDeltaY + 1) > nBMYSize)) {
+                        continue;
+                      }
+                      PointInsideConvexPolygon(iBMX + iDeltaX, iBMY + iDeltaY,
+                                               psTransform->dfMinX + (iBMX + iDeltaX) * dfPixelSize,
+                                               psTransform->dfMaxY - (iBMY + iDeltaY) * dfPixelSize,
+                                               static_cast<size_t>(iCX), static_cast<size_t>(iCY));
+                    }
+                  }
+                  //TODO this may probably be replaced by a check in the inner loop.
                   break;
                 }
               }
             }
 
             if(!bIsInside) {
-              fprintf(stderr, "Point not inside\n");
-              psTransform->pafBackMapX[iBMX + iBMY * nBMXSize] = 0;
-              psTransform->pafBackMapY[iBMX + iBMY * nBMXSize] = 0;
+              //fprintf(stderr, "Point (%ld,%ld) - (%ld,%ld) not inside\n", iBMX, iBMY, iX, iY);
             }
 
         }
@@ -652,6 +696,8 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
 // #endif
 
     CPLFree( wgtsBackMap );
+    CPLFree(iUpperLeftX);
+    CPLFree(iUpperLeftY);
 
     return true;
 }
@@ -1047,10 +1093,10 @@ int GDALGeoLocTransform( void *pTransformArg,
 
             const double dfBMX =
                 ((padfX[i] - psTransform->adfBackMapGeoTransform[0])
-                 / psTransform->adfBackMapGeoTransform[1]) - ISHIFT;
+                 / psTransform->adfBackMapGeoTransform[1]);
             const double dfBMY =
                 ((padfY[i] - psTransform->adfBackMapGeoTransform[3])
-                 / psTransform->adfBackMapGeoTransform[5]) - ISHIFT;
+                 / psTransform->adfBackMapGeoTransform[5]);
 
             // FIXME: in the case of ]-1,0[, dfBMX-iBMX will be wrong
             // We should likely error out if values are < 0 ==> affects a few
