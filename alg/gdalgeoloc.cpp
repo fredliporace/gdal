@@ -371,26 +371,32 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
 
       // if edges are parallel this is a linear equation
       // TODO: check tolerance
+      double ddPU;
+      double ddPV;
       if(fabs(k2) < 1e-10) {
-        dPU = (dHX * k1 + dFX * k0) / (dEX * k1 - dGX * k0);
-        dPV = -k0/k1;
+        ddPU = (dHX * k1 + dFX * k0) / (dEX * k1 - dGX * k0);
+        ddPV = -k0/k1;
       } else {
         double w = k1 * k1 - 4. * k0 * k2;
         // w can't be imaginary
         CPLAssert( w >= 0.);
         w = sqrt(w);
         const double ik2 = 0.5 / k2;
-        dPV = (-k1 - w) * ik2;
-        dPU = (dHX - dFX * dPV) / (dEX + dGX * dPV);
-        if( (dPU < 0.0) || (dPU > 1.0) || (dPV < 0.0) || (dPV > 1.0) ) {
-          dPV = (-k1 + w) * ik2;
-          dPU = (dHX - dFX * dPV) / (dEX + dGX * dPV);
+        ddPV = (-k1 - w) * ik2;
+        ddPU = (dHX - dFX * ddPV) / (dEX + dGX * ddPV);
+        if( (ddPU < 0.0) || (ddPU > 1.0) || (ddPV < 0.0) || (ddPV > 1.0) ) {
+          ddPV = (-k1 + w) * ik2;
+          ddPU = (dHX - dFX * ddPV) / (dEX + dGX * ddPV);
         }
       }
-      dPU = static_cast<float>(iX) + dPU;
-      dPV = static_cast<float>(iY) + dPV;
-      CPLAssert(dPU < nXSize);
-      CPLAssert(dPV < nYSize);
+      ddPU = static_cast<double>(iX) + ddPU;
+      ddPV = static_cast<double>(iY) + ddPV;
+      // CPLAssert(ddPU < nXSize);
+      // CPLAssert(ddPV < nYSize);
+      if(ddPU < nXSize || ddPV < nYSize ) {
+        dPU = static_cast<float>(ddPU);
+        dPV = static_cast<float>(ddPV);
+      }
     };
 
     // See https://stackoverflow.com/a/1119673/1259982
@@ -435,16 +441,15 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
         const double dAffinePointY = dY - dAY;
         const double dCosineSign = dAffineSegmentX * dAffinePointY - dAffineSegmentY * dAffinePointX;
         int current_side;
-        if( dCosineSign == 0.0 ) {
+        if( dCosineSign == 0. ) {
           // Point over the edge, considered at the same side as the previous
           current_side = previous_side;
         } else {
-          current_side = dCosineSign < 0 ? 0 : 1;
+          current_side = dCosineSign < 0. ? 0 : 1;
         }
         if(previous_side == -1) {
             previous_side = current_side;
-        }
-        if(previous_side != current_side) {
+        } else if(previous_side != current_side) {
           return false;
         }
         iThisX = iNextX;
@@ -534,7 +539,7 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
                   // }
                   //Now that we have a BM pixel and its cell we visit the neighboring
                   //BM pixels and fill them if inside the same cell.
-                  const int iDeltaSearchSpace = 2;
+                  const int iDeltaSearchSpace = 0;
                   for(int iDeltaX = -iDeltaSearchSpace; iDeltaX <= iDeltaSearchSpace; iDeltaX++) {
                     for(int iDeltaY = -iDeltaSearchSpace; iDeltaY <= iDeltaSearchSpace; iDeltaY++) {
                       // we skip the current BM pixel
@@ -646,10 +651,10 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
 // #ifdef DEBUG_GEOLOC
 //     if( CPLTestBool(CPLGetConfigOption("GEOLOC_DUMP", "NO")) )
 //     {
-        GDALClose(GDALCreateCopy(GDALGetDriverByName("GTiff"),
-                              "/tmp/geoloc_after_fill.tif",
-                              poMEMDS.get(),
-                              false, nullptr, nullptr, nullptr));
+        // GDALClose(GDALCreateCopy(GDALGetDriverByName("GTiff"),
+        //                       "/tmp/geoloc_after_fill.tif",
+        //                       poMEMDS.get(),
+        //                       false, nullptr, nullptr, nullptr));
 //     }
 // #endif
 
@@ -661,7 +666,8 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
         for( size_t iBMX = 0; iBMX < nBMXSize; iBMX++ )
         {
             const size_t iBM = iBMX + iBMY * nBMXSize;
-            if( psTransform->pafBackMapX[iBM] < 0 )
+            // Skip until we find a valid backmap pixel
+            if( psTransform->pafBackMapX[iBM] == -1.0f )
                 continue;
             if( iLastValidIX != static_cast<size_t>(-1) &&
                 iBMX > iLastValidIX + 1 &&
@@ -672,6 +678,7 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
             {
                 for( size_t iBMXInner = iLastValidIX + 1; iBMXInner < iBMX; ++iBMXInner )
                 {
+                  // fprintf(stderr, "Filling backmap pixel (%zu, %zu), last (%zu)\n", iBMXInner, iBMY, iLastValidIX);
                     const float alpha = static_cast<float>(iBMXInner - iLastValidIX) / (iBMX - iLastValidIX);
                     psTransform->pafBackMapX[iBMXInner + iBMY * nBMXSize] =
                         (1.0f - alpha) * psTransform->pafBackMapX[iLastValidIX + iBMY * nBMXSize] +
@@ -681,6 +688,9 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
                         alpha * psTransform->pafBackMapY[iBM];
                 }
             }
+            // else if( iLastValidIX != static_cast<size_t>(-1) && iBMX > iLastValidIX + 1) {
+            //   fprintf(stderr, "Skipping fill for backmap pixel (%zu, %zu), last (%zu)\n", iBMX, iBMY, iLastValidIX);
+            // }
             iLastValidIX = iBMX;
         }
     }
