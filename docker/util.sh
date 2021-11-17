@@ -247,13 +247,17 @@ fi
 echo "Using PROJ_VERSION=${PROJ_VERSION}"
 
 if test "${GDAL_VERSION}" = "" -o "${GDAL_VERSION}" = "master"; then
-    GDAL_VERSION=$(curl -Ls "https://api.github.com/repos/${GDAL_REPOSITORY}/commits/HEAD" -H "Accept: application/vnd.github.VERSION.sha")
+    GDAL_VERSION=$(curl -Ls "https://api.github.com/repos/${GDAL_REPOSITORY}/commits/dev" -H "Accept: application/vnd.github.VERSION.sha")
 fi
 echo "Using GDAL_VERSION=${GDAL_VERSION}"
 echo "Using GDAL_REPOSITORY=${GDAL_REPOSITORY}"
 
-IMAGE_NAME="${TARGET_IMAGE}-${TAG_NAME}"
+IMAGE_NAME="${TARGET_IMAGE}:${TAG_NAME}"
 BUILDER_IMAGE_NAME="${IMAGE_NAME}_builder"
+
+echo "IMAGE_NAME=${IMAGE_NAME}"
+echo "BUILDER_IMAGE_NAME=${BUILDER_IMAGE_NAME}"
+
 
 if test "${RELEASE}" = "yes"; then
     BUILD_ARGS=(
