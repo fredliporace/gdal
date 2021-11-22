@@ -240,11 +240,14 @@ static bool GeoLocGenerateBackMap( GDALGeoLocTransformInfo *psTransform )
 
     // Lower bound for pixel target to guarantee that the backmap pixel size
     // is not greater than the original pixel size in neither X and Y
-    const double dfMinPixelSize = std::min((psTransform->dfMaxX - psTransform->dfMinX) / nXSize,
-                                          (psTransform->dfMaxY - psTransform->dfMinY) / nYSize) / OVERSAMPLE_FACTOR;
-    const double dfTargetPixels =
-      (psTransform->dfMaxX - psTransform->dfMinX) *
-      (psTransform->dfMaxY - psTransform->dfMinY) / (dfMinPixelSize * dfMinPixelSize);
+    // ** This alternate way of defining the backmap size may create huge
+    //    maps, disabling for now and falling back to the previous implementation.
+    // const double dfMinPixelSize = std::min((psTransform->dfMaxX - psTransform->dfMinX) / nXSize,
+    //                                       (psTransform->dfMaxY - psTransform->dfMinY) / nYSize) / OVERSAMPLE_FACTOR;
+    // const double dfTargetPixels =
+    //   (psTransform->dfMaxX - psTransform->dfMinX) *
+    //   (psTransform->dfMaxY - psTransform->dfMinY) / (dfMinPixelSize * dfMinPixelSize);
+    const double dfTargetPixels = (static_cast<double>(nXSize) * nYSize * OVERSAMPLE_FACTOR);
     fprintf(stderr, "%6.3f\n", dfTargetPixels / (static_cast<double>(nXSize) * nYSize));
     const double dfPixelSize = sqrt(
         (psTransform->dfMaxX - psTransform->dfMinX) *
