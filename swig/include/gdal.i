@@ -231,7 +231,6 @@ typedef enum {
   /*! Cubic B-Spline Approximation (4x4 kernel) */     GRA_CubicSpline=3,
   /*! Lanczos windowed sinc interpolation (6x6 kernel) */ GRA_Lanczos=4,
   /*! Average (computes the average of all non-NODATA contributing pixels) */ GRA_Average=5,
-  /*! Root Mean Square (computes the RMS (Quadratic Mean) of all non-NODATA contributing pixels) */ GRA_RMS=14,
   /*! Mode (selects the value which appears most often of all the sampled points) */ GRA_Mode=6,
   /*  GRA_Gauss=7 reserved. */
   /*! Max (selects maximum of all non-NODATA contributing pixels) */ GRA_Max=8,
@@ -339,6 +338,7 @@ $1;
 %rename (DataTypeIsComplex) GDALDataTypeIsComplex;
 %rename (GetDataTypeName) GDALGetDataTypeName;
 %rename (GetDataTypeByName) GDALGetDataTypeByName;
+%rename (DataTypeUnion) GDALDataTypeUnion;
 %rename (GetColorInterpretationName) GDALGetColorInterpretationName;
 %rename (GetPaletteInterpretationName) GDALGetPaletteInterpretationName;
 %rename (DecToDMS) GDALDecToDMS;
@@ -681,6 +681,8 @@ int GDALDataTypeIsComplex( GDALDataType eDataType );
 const char *GDALGetDataTypeName( GDALDataType eDataType );
 
 GDALDataType GDALGetDataTypeByName( const char * pszDataTypeName );
+
+GDALDataType GDALDataTypeUnion( GDALDataType a, GDALDataType b );
 
 const char *GDALGetColorInterpretationName( GDALColorInterp eColorInterp );
 
@@ -1053,28 +1055,31 @@ static void PopStackingErrorHandler(std::vector<ErrorStruct>* paoErrors, bool bS
     CPLPopErrorHandler();
 
     // If the operation was successful, do not emit regular CPLError()
-    // that would be caught by the PythonBindingErrorHandler and turned into
+    // of CE_Failure type that would be caught by the PythonBindingErrorHandler
+    // and turned into
     // Python exceptions. Just emit them with the previous error handler
-    if( bSuccess )
-    {
-        for( size_t iError = 0; iError < paoErrors->size(); ++iError )
-        {
-            pfnPreviousHandler( (*paoErrors)[iError].type,
-                    (*paoErrors)[iError].no,
-                    (*paoErrors)[iError].msg );
-        }
 
-        CPLErrorReset();
-    }
-    else
+    for( size_t iError = 0; iError < paoErrors->size(); ++iError )
     {
-        for( size_t iError = 0; iError < paoErrors->size(); ++iError )
+        CPLErr eErrClass = (*paoErrors)[iError].type;
+        if( bSuccess && eErrClass == CE_Failure )
         {
-            CPLError( (*paoErrors)[iError].type,
+            pfnPreviousHandler( eErrClass,
+                                (*paoErrors)[iError].no,
+                                (*paoErrors)[iError].msg );
+        }
+        else
+        {
+            CPLError( eErrClass,
                     (*paoErrors)[iError].no,
                     "%s",
                     (*paoErrors)[iError].msg );
         }
+    }
+
+    if( bSuccess )
+    {
+        CPLErrorReset();
     }
 }
 %}

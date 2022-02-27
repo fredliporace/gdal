@@ -44,7 +44,8 @@ Related Documents
    .. toctree::
        :maxdepth: 1
 
-       csharp_compile
+       csharp_compile_legacy
+       csharp_compile_cmake
        csharp_raster
        csharp_vector
        csharp_usage
@@ -54,7 +55,7 @@ Related Documents
 Useful Links
 ------------
 
-* A variety of example programs in CSharp are available at the `/swig/csharp/apps <https://github.com/OSGeo/gdal/tree/master/gdal/swig/csharp/apps>`__ folder of the GDAL project tree.
+* A variety of example programs in CSharp are available at the `/swig/csharp/apps <https://github.com/OSGeo/gdal/tree/master/swig/csharp/apps>`__ folder of the GDAL project tree.
 
 * The Conda Feedstock 
 

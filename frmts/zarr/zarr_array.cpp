@@ -31,7 +31,7 @@
 #include "gdal_thread_pool.h"
 #include "ucs4_utf8.hpp"
 
-#include "tif_float.h"
+#include "cpl_float.h"
 
 #include "netcdf_cf_constants.h" // for CF_UNITS, etc
 
@@ -429,7 +429,7 @@ static void EncodeElt(const std::vector<DtypeElt>& elts,
                     const uint32_t uint32Val =
                         *reinterpret_cast<const uint32_t*>(pSrc + elt.gdalOffset);
                     bool bHasWarned = false;
-                    uint16_t uint16Val = CPL_SWAP16(FloatToHalf(uint32Val, bHasWarned));
+                    uint16_t uint16Val = CPL_SWAP16(CPLFloatToHalf(uint32Val, bHasWarned));
                     memcpy(pDst + elt.nativeOffset, &uint16Val, sizeof(uint16Val));
                 }
                 else
@@ -508,7 +508,7 @@ static void EncodeElt(const std::vector<DtypeElt>& elts,
                 const uint32_t uint32Val =
                     *reinterpret_cast<const uint32_t*>(pSrc + elt.gdalOffset);
                 bool bHasWarned = false;
-                const uint16_t uint16Val = FloatToHalf(uint32Val, bHasWarned);
+                const uint16_t uint16Val = CPLFloatToHalf(uint32Val, bHasWarned);
                 memcpy(pDst + elt.nativeOffset, &uint16Val, sizeof(uint16Val));
             }
             else if( elt.nativeType == DtypeElt::NativeType::SIGNED_INT &&
@@ -963,8 +963,8 @@ void ZarrArray::BlockTranspose(const std::vector<GByte>& abySrc,
         size_t       dst_inc_offset = 0;
     };
 
-    std::vector<Stack> stack(nDims + 1);
-    assert(!stack.empty()); // to make gcc 9.3 -O2 -Wnull-dereference happy
+    std::vector<Stack> stack(nDims);
+    stack.emplace_back(Stack()); // to make gcc 9.3 -O2 -Wnull-dereference happy
 
     if( bDecode )
     {
@@ -1073,7 +1073,7 @@ static void DecodeSourceElt(const std::vector<DtypeElt>& elts,
                 {
                     CPLAssert( elt.nativeType == DtypeElt::NativeType::IEEEFP );
                     CPLAssert( elt.gdalType.GetNumericDataType() == GDT_Float32 );
-                    uint32_t uint32Val = HalfToFloat(CPL_SWAP16(val));
+                    uint32_t uint32Val = CPLHalfToFloat(CPL_SWAP16(val));
                     memcpy(pDst + elt.gdalOffset, &uint32Val, sizeof(uint32Val));
                 }
                 else
@@ -1155,7 +1155,7 @@ static void DecodeSourceElt(const std::vector<DtypeElt>& elts,
                 CPLAssert( elt.gdalType.GetNumericDataType() == GDT_Float32 );
                 uint16_t uint16Val;
                 memcpy(&uint16Val, pSrc + elt.nativeOffset, sizeof(uint16Val));
-                uint32_t uint32Val = HalfToFloat(uint16Val);
+                uint32_t uint32Val = CPLHalfToFloat(uint16Val);
                 memcpy(pDst + elt.gdalOffset, &uint32Val, sizeof(uint32Val));
             }
             else if( elt.nativeType == DtypeElt::NativeType::SIGNED_INT &&
@@ -1363,8 +1363,9 @@ bool ZarrArray::LoadTileData(const uint64_t* tileIndices,
             }
 
             if( bRet &&
-                VSIFReadL(&abyCompressedData[0], 1, abyCompressedData.size(),
-                          fp) != abyCompressedData.size() )
+                (abyCompressedData.empty() ||
+                 VSIFReadL(&abyCompressedData[0], 1, abyCompressedData.size(),
+                          fp) != abyCompressedData.size()) )
             {
                 CPLError(CE_Failure, CPLE_AppDefined,
                          "Could not read tile %s correctly",
@@ -1389,8 +1390,10 @@ bool ZarrArray::LoadTileData(const uint64_t* tileIndices,
         }
     }
     VSIFCloseL(fp);
+    if( !bRet )
+        return false;
 
-    for( int i = m_oFiltersArray.Size(); bRet && i > 0; )
+    for( int i = m_oFiltersArray.Size(); i > 0; )
     {
         --i;
         const auto& oFilter = m_oFiltersArray[i];
@@ -1430,13 +1433,13 @@ bool ZarrArray::LoadTileData(const uint64_t* tileIndices,
         return false;
     }
 
-    if( bRet && !bMissingTileOut && m_bFortranOrder )
+    if( m_bFortranOrder )
     {
         BlockTranspose(abyRawTileData, abyTmpRawTileData, true);
         std::swap(abyRawTileData, abyTmpRawTileData);
     }
 
-    if( bRet && !bMissingTileOut && !abyDecodedTileData.empty() )
+    if( !abyDecodedTileData.empty() )
     {
         const size_t nSourceSize = m_aoDtypeElts.back().nativeOffset +
                                    m_aoDtypeElts.back().nativeSize;
@@ -1450,7 +1453,7 @@ bool ZarrArray::LoadTileData(const uint64_t* tileIndices,
         }
     }
 
-    return bRet;
+    return true;
 
 #undef m_abyTmpRawTileData
 #undef m_abyRawTileData

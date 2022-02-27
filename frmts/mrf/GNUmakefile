@@ -30,10 +30,18 @@ endif
 
 ifeq ($(JPEG_SETTING),internal)
 XTRA_OPT        :=      $(XTRA_OPT) -I../jpeg/libjpeg
+ifeq ($(RENAME_INTERNAL_LIBJPEG_SYMBOLS),yes)
+XTRA_OPT 	:=	$(XTRA_OPT) -DRENAME_INTERNAL_LIBJPEG_SYMBOLS
+endif
 endif
 
 ifeq ($(PNG_SETTING),internal)
 XTRA_OPT        :=      $(XTRA_OPT) -I../png/libpng -DINTERNAL_PNG
+
+ifeq ($(RENAME_INTERNAL_PNG_SYMBOLS),yes)
+XTRA_OPT 	:=	$(XTRA_OPT) -DRENAME_INTERNAL_PNG_SYMBOLS
+endif
+
 endif
 
 ifeq ($(LIBZ_SETTING),internal)

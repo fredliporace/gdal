@@ -29,6 +29,7 @@
  ****************************************************************************/
 
 #include "cpl_port.h"
+
 #include "gt_citation.h"
 
 #include <cstddef>

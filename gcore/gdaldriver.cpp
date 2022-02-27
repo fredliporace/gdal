@@ -916,6 +916,17 @@ GDALDataset *GDALDriver::DefaultCreateCopy( const char * pszFilename,
  * disabled by defining the configuration option
  * GDAL_VALIDATE_CREATION_OPTIONS=NO.
  *
+ * This function copy all metadata from the default domain ("")
+ *
+ * Even is bStrict is TRUE, only the <b>value</b> of the data is equivalent,
+ * but the data layout (INTERLEAVE as PIXEL/LINE/BAND) of the dst dataset is
+ * controlled by the papszOptions creation options, and may differ from the
+ * poSrcDS src dataset.
+ * Starting from GDAL 3.5, if no INTERLEAVE and COMPRESS creation option has
+ * been specified in papszOptions, and if the driver supports equivalent
+ * interleaving as the src dataset, the CreateCopy() will internally add the
+ * proper creation option to get the same data interleaving.
+ *
  * After you have finished working with the returned dataset, it is
  * <b>required</b> to close it with GDALClose(). This does not only close the
  * file handle, but also ensures that all the data and metadata has been written
@@ -949,6 +960,76 @@ GDALDataset *GDALDriver::CreateCopy( const char * pszFilename,
     if( pfnProgress == nullptr )
         pfnProgress = GDALDummyProgress;
 
+    const int nBandCount = poSrcDS->GetRasterCount();
+
+/* -------------------------------------------------------------------- */
+/*      If no INTERLEAVE creation option is given, we will try to add   */
+/*      one that matches the current srcDS interleaving                 */
+/* -------------------------------------------------------------------- */
+    char** papszOptionsToDelete = nullptr;
+    const char* srcInterleave = poSrcDS->GetMetadataItem("INTERLEAVE", "IMAGE_STRUCTURE");
+    if (nBandCount > 1 &&
+        srcInterleave != nullptr &&
+        CSLFetchNameValue(papszOptions, "INTERLEAVE") == nullptr &&
+        EQUAL(CSLFetchNameValueDef(papszOptions, "COMPRESS", "NONE"), "NONE"))
+    {
+
+        //look for INTERLEAVE values of the driver
+        char** interleavesCSL = nullptr;
+        const char *pszOptionList = this->GetMetadataItem( GDAL_DMD_CREATIONOPTIONLIST );
+        CPLXMLNode* xmlNode = !pszOptionList ? nullptr : CPLParseXMLString(pszOptionList);
+        for(CPLXMLNode* child = !xmlNode ? nullptr : xmlNode->psChild ; child != nullptr ; child = child->psNext)
+        {
+            if ((child->eType == CXT_Element) && EQUAL(child->pszValue, "Option"))
+            {
+                const char* nameAttribute = CPLGetXMLValue(child, "name", nullptr);
+                const bool isInterleaveAttribute = nameAttribute && EQUAL(nameAttribute, "INTERLEAVE");
+                if (isInterleaveAttribute)
+                {
+                    for(CPLXMLNode* optionChild = child->psChild ; optionChild != nullptr ; optionChild = optionChild->psNext)
+                    {
+                        if ((optionChild->eType == CXT_Element) && EQUAL(optionChild->pszValue, "Value"))
+                        {
+                            CPLXMLNode* optionChildValue = optionChild->psChild;
+                            if (optionChildValue && (optionChildValue->eType == CXT_Text))
+                            {
+                                interleavesCSL = CSLAddString(interleavesCSL, optionChildValue->pszValue);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        CPLDestroyXMLNode(xmlNode);
+
+        const char* dstInterleaveBand =
+            (CSLFindString(interleavesCSL, "BAND") >= 0) ? "BAND" :
+            (CSLFindString(interleavesCSL, "BSQ") >= 0) ? "BSQ" :
+            nullptr;
+        const char* dstInterleaveLine =
+            (CSLFindString(interleavesCSL, "LINE") >= 0) ? "LINE" :
+            (CSLFindString(interleavesCSL, "BIL") >= 0) ? "BIL" :
+            nullptr;
+        const char* dstInterleavePixel =
+            (CSLFindString(interleavesCSL, "PIXEL") >= 0) ? "PIXEL" :
+            (CSLFindString(interleavesCSL, "BIP") >= 0) ? "BIP" :
+            nullptr;
+        const char* dstInterleave =
+            EQUAL(srcInterleave, "BAND") ? dstInterleaveBand :
+            EQUAL(srcInterleave, "LINE") ? dstInterleaveLine :
+            EQUAL(srcInterleave, "PIXEL") ? dstInterleavePixel :
+            nullptr;
+        CSLDestroy(interleavesCSL);
+
+        if (dstInterleave != nullptr)
+        {
+            papszOptionsToDelete = CSLDuplicate(papszOptions);
+            papszOptionsToDelete = CSLSetNameValue(papszOptionsToDelete, "INTERLEAVE", dstInterleave);
+            papszOptionsToDelete = CSLSetNameValue(papszOptionsToDelete, "@INTERLEAVE_ADDED_AUTOMATICALLY", "YES");
+            papszOptions = papszOptionsToDelete;
+        }
+    }
+
 /* -------------------------------------------------------------------- */
 /*      Make sure we cleanup if there is an existing dataset of this    */
 /*      name.  But even if that seems to fail we will continue since    */
@@ -973,12 +1054,12 @@ GDALDataset *GDALDriver::CreateCopy( const char * pszFilename,
         }
     }
 
-    char** papszOptionsToDelete = nullptr;
     int iIdxQuietDeleteOnCreateCopy =
         CSLPartialFindString(papszOptions, "QUIET_DELETE_ON_CREATE_COPY=");
     if( iIdxQuietDeleteOnCreateCopy >= 0 )
     {
-        papszOptionsToDelete = CSLDuplicate(papszOptions);
+        if( papszOptionsToDelete == nullptr )
+            papszOptionsToDelete = CSLDuplicate(papszOptions);
         papszOptionsToDelete =
             CSLRemoveStrings(papszOptionsToDelete, iIdxQuietDeleteOnCreateCopy,
                              1, nullptr);
@@ -1034,7 +1115,6 @@ GDALDataset *GDALDriver::CreateCopy( const char * pszFilename,
 
     const int nXSize = poSrcDS->GetRasterXSize();
     const int nYSize = poSrcDS->GetRasterYSize();
-    const int nBandCount = poSrcDS->GetRasterCount();
     GDALDataType eDT = GDT_Unknown;
     if( nBandCount > 0 )
     {
@@ -1073,7 +1153,7 @@ GDALDataset *GDALDriver::CreateCopy( const char * pszFilename,
     else
     {
         poDstDS = DefaultCreateCopy( pszFilename, poSrcDS, bStrict,
-                                  papszOptions, pfnProgress, pProgressData );
+            papszOptions, pfnProgress, pProgressData );
     }
 
     CSLDestroy(papszOptionsToDelete);
@@ -1127,17 +1207,14 @@ GDALDatasetH CPL_STDCALL GDALCreateCopy( GDALDriverH hDriver,
  * @param pszName the dataset name to try and delete.
  * @param papszAllowedDrivers NULL to consider all candidate drivers, or a NULL
  * terminated list of strings with the driver short names that must be
- * considered. (Note: functionality currently broken. Argument considered as NULL)
+ * considered. (Note: implemented only starting with GDAL 3.4.1)
  * @return CE_None if the dataset does not exist, or is deleted without issues.
  */
 
 CPLErr GDALDriver::QuietDelete( const char *pszName,
-                                const char *const *papszAllowedDrivers )
+                                CSLConstList papszAllowedDrivers )
 
 {
-    // FIXME! GDALIdentifyDriver() accepts a file list, not a driver list
-    CPL_IGNORE_RET_VAL(papszAllowedDrivers);
-
     VSIStatBufL sStat;
     const bool bExists =
         VSIStatExL(pszName, &sStat,
@@ -1156,10 +1233,34 @@ CPLErr GDALDriver::QuietDelete( const char *pszName,
         return CE_None;
     }
 
-    CPLPushErrorHandler(CPLQuietErrorHandler);
-    GDALDriver * const poDriver =
-        GDALDriver::FromHandle( GDALIdentifyDriver( pszName, nullptr ) );
-    CPLPopErrorHandler();
+    GDALDriver* poDriver = nullptr;
+    if( papszAllowedDrivers )
+    {
+        GDALOpenInfo oOpenInfo(pszName, GDAL_OF_ALL);
+        for( CSLConstList papszIter = papszAllowedDrivers; *papszIter; ++papszIter )
+        {
+            GDALDriver* poTmpDriver = GDALDriver::FromHandle( GDALGetDriverByName(*papszIter) );
+            if( poTmpDriver )
+            {
+                const bool bIdentifyRes =
+                    poTmpDriver->pfnIdentifyEx ?
+                        poTmpDriver->pfnIdentifyEx(poTmpDriver, &oOpenInfo) > 0:
+                    poTmpDriver->pfnIdentify && poTmpDriver->pfnIdentify(&oOpenInfo) > 0;
+                if( bIdentifyRes )
+                {
+                    poDriver = poTmpDriver;
+                    break;
+                }
+            }
+        }
+    }
+    else
+    {
+        CPLPushErrorHandler(CPLQuietErrorHandler);
+        poDriver =
+            GDALDriver::FromHandle( GDALIdentifyDriver( pszName, nullptr ) );
+        CPLPopErrorHandler();
+    }
 
     if( poDriver == nullptr )
         return CE_None;

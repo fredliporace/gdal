@@ -29,6 +29,7 @@
  ****************************************************************************/
 
 #include "cpl_port.h"
+
 #include "gt_wkt_srs.h"
 
 #include <cmath>
@@ -759,6 +760,14 @@ OGRSpatialReferenceH GTIFGetOGISDefnAsOSR( GTIF *hGTIF, GTIFDefn * psDefn )
         {
             psDefn->UOMAngleInDegrees = dfRadians / CPLAtof(SRS_UA_DEGREE_CONV);
         }
+    }
+
+    // Avoid later division by zero.
+    if( psDefn->UOMAngleInDegrees == 0 )
+    {
+        CPLError(CE_Warning, CPLE_AppDefined,
+                 "Invalid value for GeogAngularUnitSizeGeoKey.");
+        psDefn->UOMAngleInDegrees = 1;
     }
 
     if( pszDatumName != nullptr )
@@ -3029,6 +3038,8 @@ CPLErr GTIFWktFromMemBufEx( int nSize, unsigned char *pabyBuffer,
     unsigned short nRasterType = 0;
 
     GTIF *hGTIF = GTIFNew(hTIFF);
+    if (hGTIF)
+        GTIFAttachPROJContext(hGTIF, OSRGetProjTLSContext());
 
     if( hGTIF != nullptr && GDALGTIFKeyGetSHORT(hGTIF, GTRasterTypeGeoKey,
                                              &nRasterType, 0, 1 ) == 1
@@ -3236,6 +3247,9 @@ CPLErr GTIFMemBufFromSRS( OGRSpatialReferenceH hSRS, const double *padfGeoTransf
     if( hSRS != nullptr || bPixelIsPoint )
     {
         hGTIF = GTIFNew(hTIFF);
+        if (hGTIF)
+            GTIFAttachPROJContext(hGTIF, OSRGetProjTLSContext());
+
         if( hSRS != nullptr )
             GTIFSetFromOGISDefnEx( hGTIF, hSRS,
                                    GEOTIFF_KEYS_STANDARD,

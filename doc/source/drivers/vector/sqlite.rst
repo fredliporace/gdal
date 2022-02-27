@@ -182,7 +182,7 @@ From the sqlite3 console, a typical use case is :
 
    sqlite> SELECT load_extension('libgdal.so');
 
-   sqlite> SELECT load_extension('libspatialite.so');
+   sqlite> SELECT load_extension('mod_spatialite.so');
 
    sqlite> CREATE VIRTUAL TABLE poly USING VirtualOGR('poly.shp');
 
@@ -206,7 +206,7 @@ function to automatically load all the layers of a datasource.
 
    sqlite> SELECT load_extension('libgdal.so');
 
-   sqlite> SELECT load_extension('libspatialite.so');
+   sqlite> SELECT load_extension('mod_spatialite.so');
 
    sqlite> SELECT ogr_datasource_load_layers('poly.shp');
    1
@@ -339,11 +339,44 @@ Layer Creation Options
 -  **FID=fid_name**: Name of the FID column to create.
    Defaults to OGC_FID.
 
-Other Configuration Options
----------------------------
+-  **STRICT=YES/NO**: (SQLite >= 3.37 and GDAL >= 3.35). Defaults to NO.
+   Whether the table should be created as a `strict table <https://sqlite.org/stricttables.html>`__,
+   that is strong column type checking. This normally has little influence when
+   operating only through OGR, since it has typed columns, but can help to
+   strengthen database integrity when the database might be edited by external
+   tools.
+   Note that databases that contain STRICT tables can only be read by SQLite >= 3.37.
+   The set of column data types supported in STRICT mode is: Integer, Integer64, Real,
+   String, DateTime, Date and Time. The COMPRESS_COLUMNS option is ignored in
+   strict mode.
 
-See other configure options
-`here <http://trac.osgeo.org/gdal/wiki/ConfigOptions#SQLITE_LIST_ALL_TABLES>`__.
+Configuration Options
+---------------------
+
+- **SQLITE_LIST_ALL_TABLES** =YES/NO: Set to "YES" to list all tables
+  (not just the tables listed in the geometry_columns table). This can also
+  be done using the LIST_ALL_TABLES open option. Default is NO.
+
+- **OGR_SQLITE_LIST_VIRTUAL_OGR** =YES/NO* Set to "YES" to list VirtualOGR layers.
+  Defaults to "NO" as there might be some security implications if a user is
+  provided with a file and doesn't know that there are virtual OGR tables in it.
+
+- **OGR_SQLITE_CACHE**: see Performance hints
+
+- **OGR_SQLITE_SYNCHRONOUS**: see Performance hints
+
+- **OGR_SQLITE_LOAD_EXTENSIONS** =extension1,...,extensionN,ENABLE_SQL_LOAD_EXTENSION:
+  (GDAL >= 3.5.0). Comma separated list of names of shared libraries containing
+  extensions to load at database opening.
+  If a file cannot be loaded directly, attempts are made to load with various
+  operating-system specific extensions added. So
+  for example, if "samplelib" cannot be loaded, then names like "samplelib.so"
+  or "samplelib.dylib" or "samplelib.dll" might be tried also.
+  The special value ``ENABLE_SQL_LOAD_EXTENSION`` can be used to enable the use of
+  the SQL ``load_extension()`` function, which is normally disabled in standard
+  builds of sqlite3.
+  Loading extensions as a potential security impact if they are untrusted.
+
 
 Performance hints
 -----------------
@@ -368,12 +401,12 @@ related to a corresponding Spatial Index. Explicitly setting a much more
 generously dimensioned internal Page Cache may often help to get a
 noticeably better performance. You can
 explicitly set the internal Page Cache size using the configuration
-option **OGR_SQLITE_CACHE** *value* [*value* being measured in MB]; if
+option :decl_configoption:`OGR_SQLITE_CACHE` *value* [*value* being measured in MB]; if
 your HW has enough available RAM, defining a Cache size as big as 512MB
 (or even 1024MB) may sometimes help a lot in order to get better
 performance.
 
-Setting the **OGR_SQLITE_SYNCHRONOUS** configuration option to *OFF*
+Setting the :decl_configoption:`OGR_SQLITE_SYNCHRONOUS` configuration option to *OFF*
 might also increase performance when creating SQLite databases (although
 at the expense of integrity in case of interruption/crash ).
 
@@ -440,7 +473,7 @@ Links
 -----
 
 -  `http://www.sqlite.org <http://www.sqlite.org/>`__: Main SQLite page.
--  http://www.gaia-gis.it/spatialite/: SpatiaLite extension to SQLite.
+-  https://www.gaia-gis.it/fossil/libspatialite/index: SpatiaLite extension to SQLite.
 -  `FDO RFC 16 <http://trac.osgeo.org/fdo/wiki/FDORfc16>`__: FDO
    Provider for SQLite
 -  :ref:`RasterLite2 driver <raster.rasterlite2>`

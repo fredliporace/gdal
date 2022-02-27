@@ -10,6 +10,10 @@ All GDAL OGR command line programs support the following common options.
 
     Report the version of GDAL and exit.
 
+.. option:: --build
+
+    Report detailed information about GDAL in use.
+
 .. option:: --formats
 
     List all vector formats supported by this GDAL build (read-only and
@@ -45,8 +49,8 @@ All GDAL OGR command line programs support the following common options.
     Control what debugging messages are emitted.
     A value of ON will enable all debug messages.
     A value of OFF will disable all debug messages.
-    Another value will select only debug messages containing
-    that string in the debug prefix code.
+    Otherwise, a debug messege will be emitted if its
+    category appears somewhere in the value string.
 
 .. option:: --help-general
 

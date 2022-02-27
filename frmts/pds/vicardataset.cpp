@@ -33,6 +33,7 @@ constexpr int NULL2 = -32768;
 constexpr double NULL3 = -32768.0;
 
 #include "cpl_port.h"
+
 #include "cpl_safemaths.hpp"
 #include "cpl_vax.h"
 #include "cpl_vsi_error.h"
@@ -2580,8 +2581,11 @@ GDALDataset *VICARDataset::Open( GDALOpenInfo * poOpenInfo )
     GUInt64 nNBB;
     GUInt64 nImageSize;
     if( !GetSpacings(poDS->oKeywords, nPixelOffset, nLineOffset, nBandOffset,
-                     nImageOffsetWithoutNBB, nNBB, nImageSize) )
+                     nImageOffsetWithoutNBB, nNBB, nImageSize) ||
+         nImageOffsetWithoutNBB >
+             std::numeric_limits<GUInt64>::max() - (nNBB + nBandOffset * (nBands - 1)) )
     {
+        CPLDebug("VICAR", "Invalid spacings found");
         delete poDS;
         return nullptr;
     }

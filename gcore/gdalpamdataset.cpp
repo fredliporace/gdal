@@ -152,7 +152,12 @@ GDALPamDataset::GDALPamDataset()
 GDALPamDataset::~GDALPamDataset()
 
 {
-    if( nPamFlags & GPF_DIRTY )
+    if( bSuppressOnClose )
+    {
+        if( psPam && psPam->pszPamFilename != nullptr )
+            VSIUnlink(psPam->pszPamFilename);
+    }
+    else if( nPamFlags & GPF_DIRTY )
     {
         CPLDebug( "GDALPamDataset", "In destructor with dirty metadata." );
         GDALPamDataset::TrySaveXML();
@@ -1313,6 +1318,26 @@ CPLErr GDALPamDataset::SetGeoTransform( double * padfTransform )
     }
 
     return GDALDataset::SetGeoTransform( padfTransform );
+}
+
+/************************************************************************/
+/*                        DeleteGeoTransform()                          */
+/************************************************************************/
+
+/** Remove geotransform from PAM.
+ *
+ * @since GDAL 3.4.1
+ */
+void GDALPamDataset::DeleteGeoTransform()
+
+{
+    PamInitialize();
+
+    if( psPam && psPam->bHaveGeoTransform )
+    {
+        MarkPamDirty();
+        psPam->bHaveGeoTransform = FALSE;
+    }
 }
 
 /************************************************************************/

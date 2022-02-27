@@ -32,6 +32,7 @@
 #include "cpl_conv.h"
 #include "cpl_string.h"
 #include "cpl_hash_set.h"
+#include <cctype>
 #include <set>
 
 #define PQexec this_is_an_error
@@ -102,13 +103,22 @@ OGRPGDataSource::~OGRPGDataSource()
 /*                              FlushCache()                            */
 /************************************************************************/
 
-void OGRPGDataSource::FlushCache(bool /* bAtClosing */)
+OGRErr OGRPGDataSource::FlushCacheWithRet(bool /* bAtClosing */)
 {
-    EndCopy();
-    for( int iLayer = 0; iLayer < nLayers; iLayer++ )
+    OGRErr eErr = EndCopy();
+    if( eErr == OGRERR_NONE )
     {
-        papoLayers[iLayer]->RunDeferredCreationIfNecessary();
+        for( int iLayer = 0; iLayer < nLayers; iLayer++ )
+        {
+            papoLayers[iLayer]->RunDeferredCreationIfNecessary();
+        }
     }
+    return eErr;
+}
+
+void OGRPGDataSource::FlushCache(bool bAtClosing)
+{
+    FlushCacheWithRet(bAtClosing);
 }
 
 /************************************************************************/
@@ -610,13 +620,31 @@ int OGRPGDataSource::Open( const char * pszNewName, int bUpdate,
 /* -------------------------------------------------------------------- */
     if (CPLGetConfigOption("PGCLIENTENCODING", nullptr) == nullptr)
     {
-        const char* encoding = "UNICODE";
+        const char* encoding = "UTF8";
         if (PQsetClientEncoding(hPGConn, encoding) == -1)
         {
             CPLError( CE_Warning, CPLE_AppDefined,
                     "PQsetClientEncoding(%s) failed.\n%s",
                     encoding, PQerrorMessage( hPGConn ) );
         }
+    }
+
+    {
+        PGresult* hResult = OGRPG_PQexec(hPGConn, "SHOW client_encoding" );
+        if( hResult && PQresultStatus(hResult) == PGRES_TUPLES_OK
+            && PQntuples(hResult) == 1 )
+        {
+            const char* pszClientEncoding = PQgetvalue(hResult,0,0);
+            if( pszClientEncoding )
+            {
+                CPLDebug("PG","Client encoding: '%s'", pszClientEncoding);
+                if( EQUAL(pszClientEncoding, "UTF8") )
+                {
+                    m_bUTF8ClientEncoding = true;
+                }
+            }
+        }
+        OGRPGClearResult(hResult);
     }
 
 /* -------------------------------------------------------------------- */
@@ -1789,6 +1817,38 @@ OGRPGDataSource::ICreateLayer( const char * pszLayerName,
     if( poSRS != nullptr )
         nSRSId = FetchSRSId( poSRS );
 
+    if( eType != wkbNone && EQUAL(pszGeomType, "geography") )
+    {
+        if( poSRS != nullptr && !poSRS->IsGeographic() )
+        {
+            CPLError(CE_Failure, CPLE_NotSupported,
+                     "geography type only supports geographic SRS");
+
+            CPLFree( pszTableName );
+            CPLFree( pszSchemaName );
+            return nullptr;
+        }
+
+        if( !(sPostGISVersion.nMajor >= 3 ||
+              (sPostGISVersion.nMajor == 2 && sPostGISVersion.nMinor >= 2)) &&
+            nSRSId != nUndefinedSRID && nSRSId != 4326 )
+        {
+            CPLError(CE_Failure, CPLE_NotSupported,
+                     "geography type in PostGIS < 2.2 only supports SRS = EPSG:4326");
+
+            CPLFree( pszTableName );
+            CPLFree( pszSchemaName );
+            return nullptr;
+        }
+
+        if( nSRSId == nUndefinedSRID )
+        {
+            CPLError(CE_Warning, CPLE_AppDefined,
+                     "Assuming EPSG:4326 for geographic type (but no implicit reprojection to it will be done)");
+            nSRSId = 4326;
+        }
+    }
+
     const char *pszGeometryType = OGRToOGCGeomType(eType);
 
     int bDeferredCreation = CPLTestBool(CPLGetConfigOption( "OGR_PG_DEFERRED_CREATION", "YES" ));
@@ -2568,12 +2628,16 @@ OGRErr OGRPGDataSource::CommitTransaction()
     /*CPLDebug("PG", "poDS=%p CommitTransaction() nSoftTransactionLevel=%d",
              this, nSoftTransactionLevel);*/
 
-    FlushCache(false);
+    OGRErr eErr = FlushCacheWithRet(false);
+    if( eErr != OGRERR_NONE )
+    {
+        RollbackTransaction();
+        return eErr;
+    }
 
     nSoftTransactionLevel--;
     bUserTransactionActive = FALSE;
 
-    OGRErr eErr;
     if( bSavePointActive )
     {
         CPLAssert(nSoftTransactionLevel > 0);
@@ -2751,14 +2815,9 @@ OGRErr OGRPGDataSource::FlushSoftTransaction()
 
     bSavePointActive = FALSE;
 
-    OGRErr eErr = OGRERR_NONE;
-    if( nSoftTransactionLevel > 0 )
-    {
-        CPLAssert(nSoftTransactionLevel == 1 );
-        nSoftTransactionLevel = 0;
-        eErr = DoTransactionCommand("COMMIT");
-    }
-    return eErr;
+    CPLAssert(nSoftTransactionLevel == 1 );
+    nSoftTransactionLevel = 0;
+    return DoTransactionCommand("COMMIT");
 }
 
 /************************************************************************/
@@ -2925,8 +2984,8 @@ OGRLayer * OGRPGDataSource::ExecuteSQL( const char *pszSQLCommand,
                                         const char *pszDialect )
 
 {
-    /* Skip leading spaces */
-    while(*pszSQLCommand == ' ')
+    /* Skip leading whitespace characters */
+    while(std::isspace(static_cast<unsigned char>(*pszSQLCommand)))
         pszSQLCommand ++;
 
     FlushCache(false);

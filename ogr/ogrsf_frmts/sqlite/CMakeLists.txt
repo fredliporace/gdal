@@ -25,30 +25,40 @@ add_gdal_driver(
 gdal_standard_includes(ogr_SQLite)
 
 target_compile_definitions(ogr_SQLite PRIVATE -DHAVE_SQLITE)
-gdal_target_link_libraries(TARGET ogr_SQLite LIBRARIES SQLite::SQLite3)
-gdal_target_link_libraries(TARGET ogr_SQLite LIBRARIES PROJ::PROJ)
+gdal_target_link_libraries(ogr_SQLite PRIVATE SQLite::SQLite3)
+gdal_target_link_libraries(ogr_SQLite PRIVATE PROJ::proj)
 
-if (SQLITE_HAS_PCRE AND GDAL_USE_PCRE)
-  target_include_directories(ogr_SQLite PRIVATE ${PCRE_INCLUDE_DIRS})
+option(OGR_SQLITE_ALLOW_LOAD_EXTENSIONS "Whether SQLite extension loading is enabled through the OGR_SQLITE_LOAD_EXTENSIONS configuration option" ON)
+if (OGR_SQLITE_ALLOW_LOAD_EXTENSIONS)
+  target_compile_definitions(ogr_SQLite PRIVATE -DOGR_SQLITE_ALLOW_LOAD_EXTENSIONS)
+endif()
+
+if (GDAL_USE_PCRE2)
+  target_compile_definitions(ogr_SQLite PRIVATE -DHAVE_PCRE2)
+  gdal_target_link_libraries(ogr_SQLite PRIVATE PCRE2::PCRE2)
+elseif (GDAL_USE_PCRE)
   target_compile_definitions(ogr_SQLite PRIVATE -DHAVE_PCRE)
-  gdal_target_link_libraries(TARGET ogr_SQLite LIBRARIES PCRE::PCRE)
+  gdal_target_link_libraries(ogr_SQLite PRIVATE PCRE::PCRE)
 endif ()
 
-if (SQLITE_HAS_COLUMN_METADATA)
+if (SQLite3_HAS_COLUMN_METADATA)
   target_compile_definitions(ogr_SQLite PRIVATE -DSQLITE_HAS_COLUMN_METADATA)
 endif ()
 
+if (SQLite3_HAS_NON_DEPRECATED_AUTO_EXTENSION)
+  target_compile_definitions(ogr_SQLite PRIVATE -DSQLITE_HAS_NON_DEPRECATED_AUTO_EXTENSION)
+endif ()
+
 if (GDAL_USE_SPATIALITE)
-  get_filename_component(SPATIALITE_SONAME ${SPATIALITE_LIBRARY} NAME CACHE)
   target_compile_definitions(ogr_SQLite PRIVATE -DHAVE_SPATIALITE)
-  gdal_target_link_libraries(TARGET ogr_SQLite LIBRARIES SPATIALITE::SPATIALITE)
+  gdal_target_link_libraries(ogr_SQLite PRIVATE SPATIALITE::SPATIALITE)
   if (SPATIALITE_VERSION_STRING VERSION_GREATER 4.1.2 OR SPATIALITE_VERSION_STRING VERSION_EQUAL 4.1.2)
     target_compile_definitions(ogr_SQLite PRIVATE -DSPATIALITE_412_OR_LATER)
   endif ()
 endif ()
 if (GDAL_USE_RASTERLITE2)
   target_compile_definitions(ogr_SQLite PRIVATE -DHAVE_RASTERLITE2)
-  gdal_target_link_libraries(TARGET ogr_SQLite LIBRARIES RASTERLITE2::RASTERLITE2)
+  gdal_target_link_libraries(ogr_SQLite PRIVATE RASTERLITE2::RASTERLITE2)
 endif ()
 
 # Test utility
@@ -63,3 +73,15 @@ if (GDAL_USE_SPATIALITE)
     target_compile_definitions(test_load_virtual_ogr PRIVATE -DSPATIALITE_AMALGAMATION)
   endif ()
 endif ()
+
+# Test sqlite3 extension
+add_library(my_test_sqlite3_ext MODULE my_test_sqlite3_ext.c)
+gdal_standard_includes(my_test_sqlite3_ext)
+get_target_property(PLUGIN_OUTPUT_DIR ${GDAL_LIB_TARGET_NAME} PLUGIN_OUTPUT_DIR)
+set_target_properties(my_test_sqlite3_ext
+                      PROPERTIES
+                      PREFIX ""
+                      LIBRARY_OUTPUT_DIRECTORY ${PLUGIN_OUTPUT_DIR}
+                      SKIP_BUILD_RPATH YES
+                      )
+target_link_libraries(my_test_sqlite3_ext PRIVATE SQLite::SQLite3)

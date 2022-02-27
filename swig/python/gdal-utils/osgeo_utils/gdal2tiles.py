@@ -11,8 +11,6 @@
 #           - support of global tiles (Spherical Mercator) for compatibility
 #               with interactive web maps a la Google Maps
 # Author:   Klokan Petr Pridal, klokan at klokan dot cz
-# Web:      http://www.klokan.cz/projects/gdal2tiles/
-# GUI:      http://www.maptiler.org/
 #
 ###############################################################################
 # Copyright (c) 2008, Klokan Petr Pridal
@@ -40,17 +38,18 @@
 
 from __future__ import print_function, division
 
+import contextlib
 import glob
 import json
 import math
 import optparse
 import os
 import shutil
+import stat
 import sys
 import tempfile
 import threading
 from functools import partial
-from multiprocessing import Pool
 from typing import List, NoReturn, Tuple, Optional, Any
 from uuid import uuid4
 from xml.etree import ElementTree
@@ -75,6 +74,54 @@ resampling_list = (
     'average', 'near', 'bilinear', 'cubic', 'cubicspline', 'lanczos',
     'antialias', 'mode', 'max', 'min', 'med', 'q1', 'q3')
 webviewer_list = ('all', 'google', 'openlayers', 'leaflet', 'mapml', 'none')
+
+
+def makedirs(path):
+    """ Wrapper for os.makedirs() that can work with /vsi files too """
+    if path.startswith('/vsi'):
+        if gdal.MkdirRecursive(path, 0o755) != 0:
+            raise Exception(f'Cannot create {path}')
+    else:
+        os.makedirs(path, exist_ok=True)
+
+
+def isfile(path):
+    """ Wrapper for os.path.isfile() that can work with /vsi files too """
+    if path.startswith('/vsi'):
+        stat_res = gdal.VSIStatL(path)
+        if stat is None:
+            return False
+        return stat.S_ISREG(stat_res.mode)
+    else:
+        return os.path.isfile(path)
+
+
+class VSIFile:
+    """ Expose a simplistic file-like API for a /vsi file """
+    def __init__(self, filename, f):
+        self.filename = filename
+        self.f = f
+
+    def write(self, content):
+        if gdal.VSIFWriteL(content, 1, len(content), self.f) != len(content):
+            raise Exception('Error while writing into %s' % self.filename)
+
+
+@contextlib.contextmanager
+def my_open(filename, mode):
+    """ Wrapper for open() built-in method that can work with /vsi files too """
+    if filename.startswith('/vsi'):
+        f = gdal.VSIFOpenL(filename, mode)
+        if f is None:
+            raise Exception(f'Cannot open {filename} in {mode}')
+        try:
+            yield VSIFile(filename, f)
+        finally:
+            if gdal.VSIFCloseL(f) != 0:
+                raise Exception(f'Cannot close {filename}')
+    else:
+        yield open(filename, mode)
+
 
 class UnsupportedTileMatrixSet(Exception):
     pass
@@ -650,11 +697,11 @@ def generate_kml(tx, ty, tz, tileext, tile_size, tileswne, options, children=Non
 
     if tx is None:
         tilekml = False
-        args['title'] = options.title
+        args['xml_escaped_title'] = gdal.EscapeString(options.title, gdal.CPLES_XML)
     else:
         tilekml = True
         args['realtiley'] = GDAL2Tiles.getYTile(ty, tz, options)
-        args['title'] = "%d/%d/%d.kml" % (tz, tx, args['realtiley'])
+        args['xml_escaped_title'] = "%d/%d/%d.kml" % (tz, tx, args['realtiley'])
         args['south'], args['west'], args['north'], args['east'] = tileswne(tx, ty, tz)
 
     if tx == 0:
@@ -674,7 +721,7 @@ def generate_kml(tx, ty, tz, tileext, tile_size, tileswne, options, children=Non
     s = """<?xml version="1.0" encoding="utf-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
-    <name>%(title)s</name>
+    <name>%(xml_escaped_title)s</name>
     <description></description>
     <Style>
       <ListStyle id="hideChildren">
@@ -761,6 +808,9 @@ def scale_query_to_tile(dsquery, dstile, tiledriver, options, tilefilename=''):
                     tilefilename, res))
 
     elif options.resampling == 'antialias' and numpy_available:
+
+        if tilefilename.startswith('/vsi'):
+            raise Exception('Outputing to /vsi file systems with antialias mode is not supported')
 
         # Scaling by PIL (Python Imaging Library) - improved Lanczos
         array = numpy.zeros((querysize, querysize, tilebands), numpy.uint8)
@@ -1189,145 +1239,141 @@ def create_base_tile(tile_job_info: 'TileJobInfo', tile_detail: 'TileDetail') ->
         swne = get_tile_swne(tile_job_info, options)
         if swne is not None:
             kmlfilename = os.path.join(output, str(tz), str(tx), '%d.kml' % GDAL2Tiles.getYTile(ty, tz, options))
-            if not options.resume or not os.path.exists(kmlfilename):
-                with open(kmlfilename, 'wb') as f:
+            if not options.resume or not isfile(kmlfilename):
+                with my_open(kmlfilename, 'wb') as f:
                     f.write(generate_kml(
                         tx, ty, tz, tile_job_info.tile_extension, tile_job_info.tile_size,
                         swne, tile_job_info.options
                     ).encode('utf-8'))
 
+def create_overview_tile(base_tz: int, base_tiles: List[Tuple[int, int]], output_folder: str, tile_job_info: 'TileJobInfo', options: Options):
+    """ Generating an overview tile from no more than 4 underlying tiles(base tiles) """
 
-
-def create_overview_tiles(tile_job_info: 'TileJobInfo', output_folder: str, options: Options) -> None:
-    """Generation of the overview tiles (higher in the pyramid) based on existing tiles"""
     mem_driver = gdal.GetDriverByName('MEM')
     tile_driver = tile_job_info.tile_driver
     out_driver = gdal.GetDriverByName(tile_driver)
 
     tilebands = tile_job_info.nb_data_bands + 1
 
-    # Usage of existing tiles: from 4 underlying tiles generate one as overview.
+    dsquery = mem_driver.Create('', 2 * tile_job_info.tile_size,
+                                2 * tile_job_info.tile_size, tilebands)
+    # TODO: fill the null value
+    dstile = mem_driver.Create('', tile_job_info.tile_size, tile_job_info.tile_size,
+                               tilebands)
 
-    tcount = 0
-    for tz in range(tile_job_info.tmaxz - 1, tile_job_info.tminz - 1, -1):
-        tminx, tminy, tmaxx, tmaxy = tile_job_info.tminmax[tz]
-        tcount += (1 + abs(tmaxx - tminx)) * (1 + abs(tmaxy - tminy))
+    usable_base_tiles = []
 
-    ti = 0
+    for base_tile in base_tiles:
+        base_tx = base_tile[0]
+        base_ty = base_tile[1]
+        base_ty_real = GDAL2Tiles.getYTile(base_ty, base_tz, options)
 
-    if tcount == 0:
+        base_tile_path = os.path.join(output_folder, str(base_tz), str(base_tx),
+                                      "%s.%s" % (base_ty_real, tile_job_info.tile_extension))
+        if not isfile(base_tile_path):
+            continue
+
+        dsquerytile = gdal.Open(base_tile_path, gdal.GA_ReadOnly)
+
+        if base_tx % 2 == 0:
+            tileposx = 0
+        else:
+            tileposx = tile_job_info.tile_size
+
+        if options.xyz and options.profile == 'raster':
+            if base_ty % 2 == 0:
+                tileposy = 0
+            else:
+                tileposy = tile_job_info.tile_size
+        else:
+            if base_ty % 2 == 0:
+                tileposy = tile_job_info.tile_size
+            else:
+                tileposy = 0
+
+        dsquery.WriteRaster(
+            tileposx, tileposy, tile_job_info.tile_size,
+            tile_job_info.tile_size,
+            dsquerytile.ReadRaster(0, 0,
+                                   tile_job_info.tile_size,
+                                   tile_job_info.tile_size),
+            band_list=list(range(1, tilebands + 1)))
+
+        usable_base_tiles.append(base_tile)
+
+    overview_tz = base_tz - 1
+    overview_tx = base_tiles[0][0] >> 1
+    overview_ty = base_tiles[0][1] >> 1
+    overview_ty_real = GDAL2Tiles.getYTile(overview_ty, overview_tz, options)
+
+    tilefilename = os.path.join(output_folder, str(overview_tz), str(overview_tx),
+                                "%s.%s" % (overview_ty_real, tile_job_info.tile_extension))
+    if options.verbose:
+        print(tilefilename)
+    if options.resume and isfile(tilefilename):
+        if options.verbose:
+            print("Tile generation skipped because of --resume")
         return
 
-    if not options.quiet:
-        print("Generating Overview Tiles:")
+    if usable_base_tiles:
+        scale_query_to_tile(dsquery, dstile, tile_driver, options,
+                            tilefilename=tilefilename)
+        # Write a copy of tile to png/jpg
+        if options.resampling != 'antialias':
+            # Write a copy of tile to png/jpg
+            out_driver.CreateCopy(tilefilename, dstile, strict=0)
 
-    progress_bar = ProgressBar(tcount)
-    progress_bar.start()
+        if options.verbose:
+            print("\tbuild from zoom", base_tz, " tiles:", *base_tiles)
 
+        # Create a KML file for this tile.
+        if tile_job_info.kml:
+            swne = get_tile_swne(tile_job_info, options)
+            if swne is not None:
+                with my_open(os.path.join(
+                    output_folder,
+                    '%d/%d/%d.kml' % (overview_tz, overview_tx, overview_ty_real)
+                ), 'wb') as f:
+                    f.write(generate_kml(
+                        overview_tx, overview_ty, overview_tz, tile_job_info.tile_extension, tile_job_info.tile_size,
+                        swne, options, [(t[0], t[1], base_tz) for t in base_tiles]
+                    ).encode('utf-8'))
+
+
+def group_overview_base_tiles(base_tz: int, output_folder: str, tile_job_info: 'TileJobInfo') -> List[List[Tuple[int, int]]]:
+    """ Group base tiles that belong to the same overview tile """
+
+    overview_to_bases = {}
+    tminx, tminy, tmaxx, tmaxy = tile_job_info.tminmax[base_tz]
+    for ty in range(tmaxy, tminy - 1, -1):
+        overview_ty = ty >> 1
+        for tx in range(tminx, tmaxx + 1):
+            overview_tx = tx >> 1
+            base_tile = (tx, ty)
+            overview_tile = (overview_tx, overview_ty)
+
+            if overview_tile not in overview_to_bases:
+                overview_to_bases[overview_tile] = []
+
+            overview_to_bases[overview_tile].append(base_tile)
+
+    # Create directories for the tiles
+    overview_tz = base_tz - 1
+    for tx in range(tminx, tmaxx + 1):
+        overview_tx = tx >> 1
+        tiledirname = os.path.join(output_folder, str(overview_tz), str(overview_tx))
+        makedirs(tiledirname)
+
+    return list(overview_to_bases.values())
+
+
+def count_overview_tiles(tile_job_info: 'TileJobInfo') -> int:
+    tile_number = 0
     for tz in range(tile_job_info.tmaxz - 1, tile_job_info.tminz - 1, -1):
         tminx, tminy, tmaxx, tmaxy = tile_job_info.tminmax[tz]
-        for ty in range(tmaxy, tminy - 1, -1):
-            for tx in range(tminx, tmaxx + 1):
+        tile_number += (1 + abs(tmaxx - tminx)) * (1 + abs(tmaxy - tminy))
 
-                ti += 1
-                ytile = GDAL2Tiles.getYTile(ty, tz, options)
-                tilefilename = os.path.join(output_folder,
-                                            str(tz),
-                                            str(tx),
-                                            "%s.%s" % (ytile, tile_job_info.tile_extension))
-
-                if options.verbose:
-                    print(ti, '/', tcount, tilefilename)
-
-                if options.resume and os.path.exists(tilefilename):
-                    if options.verbose:
-                        print("Tile generation skipped because of --resume")
-                    else:
-                        progress_bar.log_progress()
-                    continue
-
-                # Create directories for the tile
-                os.makedirs(os.path.dirname(tilefilename), exist_ok=True)
-
-                dsquery = mem_driver.Create('', 2 * tile_job_info.tile_size,
-                                            2 * tile_job_info.tile_size, tilebands)
-                # TODO: fill the null value
-                dstile = mem_driver.Create('', tile_job_info.tile_size, tile_job_info.tile_size,
-                                           tilebands)
-
-                # TODO: Implement more clever walking on the tiles with cache functionality
-                # probably walk should start with reading of four tiles from top left corner
-                # Hilbert curve
-
-                children = []
-                # Read the tiles and write them to query window
-                for y in range(2 * ty, 2 * ty + 2):
-                    for x in range(2 * tx, 2 * tx + 2):
-                        minx, miny, maxx, maxy = tile_job_info.tminmax[tz + 1]
-                        if x >= minx and x <= maxx and y >= miny and y <= maxy:
-                            ytile2 = GDAL2Tiles.getYTile(y, tz+1, options)
-                            base_tile_path = os.path.join(output_folder, str(tz + 1), str(x),
-                                                          "%s.%s" % (ytile2, tile_job_info.tile_extension))
-                            if not os.path.isfile(base_tile_path):
-                                continue
-
-                            dsquerytile = gdal.Open(
-                                base_tile_path,
-                                gdal.GA_ReadOnly)
-
-                            if x == 2*tx:
-                                tileposx = 0
-                            else:
-                                tileposx = tile_job_info.tile_size
-
-                            if options.xyz and options.profile == 'raster':
-                                if y == 2*ty:
-                                    tileposy = 0
-                                else:
-                                    tileposy = tile_job_info.tile_size
-                            else:
-                                if y == 2*ty:
-                                    tileposy = tile_job_info.tile_size
-                                else:
-                                    tileposy = 0
-
-                            dsquery.WriteRaster(
-                                tileposx, tileposy, tile_job_info.tile_size,
-                                tile_job_info.tile_size,
-                                dsquerytile.ReadRaster(0, 0,
-                                                       tile_job_info.tile_size,
-                                                       tile_job_info.tile_size),
-                                band_list=list(range(1, tilebands + 1)))
-                            children.append([x, y, tz + 1])
-
-                if children:
-                    scale_query_to_tile(dsquery, dstile, tile_driver, options,
-                                        tilefilename=tilefilename)
-                    # Write a copy of tile to png/jpg
-                    if options.resampling != 'antialias':
-                        # Write a copy of tile to png/jpg
-                        out_driver.CreateCopy(tilefilename, dstile, strict=0)
-
-                    if options.verbose:
-                        print("\tbuild from zoom", tz + 1,
-                              " tiles:", (2 * tx, 2 * ty), (2 * tx + 1, 2 * ty),
-                              (2 * tx, 2 * ty + 1), (2 * tx + 1, 2 * ty + 1))
-
-                    # Create a KML file for this tile.
-                    if tile_job_info.kml:
-                        swne = get_tile_swne(tile_job_info, options)
-                        if swne is not None:
-                            with open(os.path.join(
-                                output_folder,
-                                '%d/%d/%d.kml' % (tz, tx, ytile)
-                            ), 'wb') as f:
-                                f.write(generate_kml(
-                                    tx, ty, tz, tile_job_info.tile_extension, tile_job_info.tile_size,
-                                    swne, options, children
-                                ).encode('utf-8'))
-
-                if not options.verbose and not options.quiet:
-                    progress_bar.log_progress()
+    return tile_number
 
 
 def optparse_init() -> optparse.OptionParser:
@@ -1369,6 +1415,10 @@ def optparse_init() -> optparse.OptionParser:
                  dest="nb_processes",
                  type='int',
                  help="Number of processes to use for tiling")
+    p.add_option("--mpi",
+                 action="store_true", dest="mpi",
+                 help="Assume launched by mpiexec and ignore --processes. "
+                      "User should set GDAL_CACHEMAX to size per process.")
     p.add_option("--tilesize", dest="tilesize",  metavar="PIXELS", default=256,
                  type='int',
                  help="Width and height in pixel of a tile")
@@ -1412,7 +1462,7 @@ def optparse_init() -> optparse.OptionParser:
     p.add_option_group(g)
 
 
-    p.set_defaults(verbose=False, profile="mercator", kml=False, url='',
+    p.set_defaults(verbose=False, profile="mercator", kml=None, url='',
                    webviewer='all', copyright='', resampling='average', resume=False,
                    googlekey='INSERT_YOUR_KEY_HERE', bingkey='INSERT_YOUR_KEY_HERE',
                    processes=1)
@@ -1433,7 +1483,7 @@ def process_args(argv: List[str]) -> Tuple[str, str, Options]:
                         "files: gdal_vrtmerge.py -o merged.vrt %s" % " ".join(args))
 
     input_file = args[0]
-    if not os.path.isfile(input_file):
+    if not isfile(input_file):
         exit_with_error("The provided input file %s does not exist or is not a file" % input_file)
 
     if len(args) == 2:
@@ -1623,7 +1673,11 @@ class GDAL2Tiles(object):
             self.tile_size = options.tilesize
         self.tiledriver = 'PNG'
         self.tileext = 'png'
-        self.tmp_dir = tempfile.mkdtemp()
+        if options.mpi:
+            makedirs(output_folder)
+            self.tmp_dir = tempfile.mkdtemp(dir=output_folder)
+        else:
+            self.tmp_dir = tempfile.mkdtemp()
         self.tmp_vrt_filename = os.path.join(self.tmp_dir, str(uuid4()) + '.vrt')
 
         # Should we read bigger window of the input raster and scale it down?
@@ -1775,10 +1829,14 @@ class GDAL2Tiles(object):
         srs4326.ImportFromEPSG(4326)
         srs4326.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
         if self.out_srs and srs4326.ExportToProj4() == self.out_srs.ExportToProj4():
-            self.kml = True
             self.isepsg4326 = True
-            if self.options.verbose:
+            if self.kml is None:
+                self.kml = True
+            if self.kml and self.options.verbose:
                 print("KML autotest OK!")
+
+        if self.kml is None:
+            self.kml = False
 
         # Read the georeference
         self.out_gt = self.warped_input_dataset.GetGeoTransform()
@@ -1991,7 +2049,7 @@ class GDAL2Tiles(object):
         tiles are generated during the tile processing).
         """
 
-        os.makedirs(self.output_folder, exist_ok=True)
+        makedirs(self.output_folder)
 
         if self.options.profile == 'mercator':
 
@@ -2004,15 +2062,15 @@ class GDAL2Tiles(object):
             # Generate googlemaps.html
             if self.options.webviewer in ('all', 'google') and self.options.profile == 'mercator':
                 if (not self.options.resume or not
-                        os.path.exists(os.path.join(self.output_folder, 'googlemaps.html'))):
-                    with open(os.path.join(self.output_folder, 'googlemaps.html'), 'wb') as f:
+                        isfile(os.path.join(self.output_folder, 'googlemaps.html'))):
+                    with my_open(os.path.join(self.output_folder, 'googlemaps.html'), 'wb') as f:
                         f.write(self.generate_googlemaps().encode('utf-8'))
 
             # Generate leaflet.html
             if self.options.webviewer in ('all', 'leaflet'):
                 if (not self.options.resume or not
-                        os.path.exists(os.path.join(self.output_folder, 'leaflet.html'))):
-                    with open(os.path.join(self.output_folder, 'leaflet.html'), 'wb') as f:
+                        isfile(os.path.join(self.output_folder, 'leaflet.html'))):
+                    with my_open(os.path.join(self.output_folder, 'leaflet.html'), 'wb') as f:
                         f.write(self.generate_leaflet().encode('utf-8'))
 
         elif self.options.profile == 'geodetic':
@@ -2036,13 +2094,13 @@ class GDAL2Tiles(object):
         # Generate openlayers.html
         if self.options.webviewer in ('all', 'openlayers'):
             if (not self.options.resume or not
-                    os.path.exists(os.path.join(self.output_folder, 'openlayers.html'))):
-                with open(os.path.join(self.output_folder, 'openlayers.html'), 'wb') as f:
+                    isfile(os.path.join(self.output_folder, 'openlayers.html'))):
+                with my_open(os.path.join(self.output_folder, 'openlayers.html'), 'wb') as f:
                     f.write(self.generate_openlayers().encode('utf-8'))
 
         # Generate tilemapresource.xml.
-        if not self.options.xyz and self.swne is not None and (not self.options.resume or not os.path.exists(os.path.join(self.output_folder, 'tilemapresource.xml'))):
-            with open(os.path.join(self.output_folder, 'tilemapresource.xml'), 'wb') as f:
+        if not self.options.xyz and self.swne is not None and (not self.options.resume or not isfile(os.path.join(self.output_folder, 'tilemapresource.xml'))):
+            with my_open(os.path.join(self.output_folder, 'tilemapresource.xml'), 'wb') as f:
                 f.write(self.generate_tilemapresource().encode('utf-8'))
 
         # Generate mapml file
@@ -2050,8 +2108,8 @@ class GDAL2Tiles(object):
            self.options.xyz and \
            self.options.profile != 'raster' and \
            (self.options.profile != 'geodetic' or self.options.tmscompatible) and \
-           (not self.options.resume or not os.path.exists(os.path.join(self.output_folder, 'mapml.mapml'))):
-            with open(os.path.join(self.output_folder, 'mapml.mapml'), 'wb') as f:
+           (not self.options.resume or not isfile(os.path.join(self.output_folder, 'mapml.mapml'))):
+            with my_open(os.path.join(self.output_folder, 'mapml.mapml'), 'wb') as f:
                 f.write(self.generate_mapml().encode('utf-8'))
 
 
@@ -2066,8 +2124,8 @@ class GDAL2Tiles(object):
             # Generate Root KML
             if self.kml:
                 if (not self.options.resume or not
-                        os.path.exists(os.path.join(self.output_folder, 'doc.kml'))):
-                    with open(os.path.join(self.output_folder, 'doc.kml'), 'wb') as f:
+                        isfile(os.path.join(self.output_folder, 'doc.kml'))):
+                    with my_open(os.path.join(self.output_folder, 'doc.kml'), 'wb') as f:
                         f.write(generate_kml(
                             None, None, None, self.tileext, self.tile_size, self.tileswne,
                             self.options, children
@@ -2104,6 +2162,12 @@ class GDAL2Tiles(object):
         tile_details = []
 
         tz = self.tmaxz
+
+        # Create directories for the tiles
+        for tx in range(tminx, tmaxx + 1):
+            tiledirname = os.path.join(self.output_folder, str(tz), str(tx))
+            makedirs(tiledirname)
+
         for ty in range(tmaxy, tminy - 1, -1):
             for tx in range(tminx, tmaxx + 1):
 
@@ -2114,13 +2178,10 @@ class GDAL2Tiles(object):
                 if self.options.verbose:
                     print(ti, '/', tcount, tilefilename)
 
-                if self.options.resume and os.path.exists(tilefilename):
+                if self.options.resume and isfile(tilefilename):
                     if self.options.verbose:
                         print("Tile generation skipped because of --resume")
                     continue
-
-                # Create directories for the tile
-                os.makedirs(os.path.dirname(tilefilename), exist_ok=True)
 
                 if self.options.profile == 'mercator':
                     # Tile bounds in EPSG:3857
@@ -2259,7 +2320,7 @@ class GDAL2Tiles(object):
         """
 
         args = {}
-        args['title'] = self.options.title
+        args['xml_escaped_title'] = gdal.EscapeString(self.options.title, gdal.CPLES_XML)
         args['south'], args['west'], args['north'], args['east'] = self.swne
         args['tile_size'] = self.tile_size
         args['tileformat'] = self.tileext
@@ -2279,7 +2340,7 @@ class GDAL2Tiles(object):
 
         s = """<?xml version="1.0" encoding="utf-8"?>
     <TileMap version="1.0.0" tilemapservice="http://tms.osgeo.org/1.0.0">
-      <Title>%(title)s</Title>
+      <Title>%(xml_escaped_title)s</Title>
       <Abstract></Abstract>
       <SRS>%(srs)s</SRS>
       <BoundingBox minx="%(west).14f" miny="%(south).14f" maxx="%(east).14f" maxy="%(north).14f"/>
@@ -2310,7 +2371,7 @@ class GDAL2Tiles(object):
         publishurl
         """
         args = {}
-        args['title'] = self.options.title
+        args['xml_escaped_title'] = gdal.EscapeString(self.options.title, gdal.CPLES_XML)
         args['googlemapskey'] = self.options.googlekey
         args['south'], args['west'], args['north'], args['east'] = self.swne
         args['minzoom'] = self.tminz
@@ -2323,7 +2384,7 @@ class GDAL2Tiles(object):
         s = r"""<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
             <html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml">
               <head>
-                <title>%(title)s</title>
+                <title>%(xml_escaped_title)s</title>
                 <meta http-equiv="content-type" content="text/html; charset=utf-8"/>
                 <meta http-equiv='imagetoolbar' content='no'/>
                 <style type="text/css"> v\:* {behavior:url(#default#VML);}
@@ -2353,7 +2414,6 @@ class GDAL2Tiles(object):
 
                 /*
                  * Create a Custom Opacity GControl
-                 * http://www.maptiler.org/google-maps-overlay-opacity-control/
                  */
 
                 var CTransparencyLENGTH = 58;
@@ -2400,16 +2460,16 @@ class GDAL2Tiles(object):
 
                     // Handle transparent PNG files in MSIE
                     if (this.ie) {
-                      var loader = "filter:progid:DXImageTransform.Microsoft.AlphaImageLoader(src='http://www.maptiler.org/img/opacity-slider.png', sizingMethod='crop');";
+                      var loader = "filter:progid:DXImageTransform.Microsoft.AlphaImageLoader(src='https://gdal.org/resources/gdal2tiles/opacity-slider.png', sizingMethod='crop');";
                       container.innerHTML = '<div style="height:21px; width:70px; ' +loader+ '" ></div>';
                     } else {
-                      container.innerHTML = '<div style="height:21px; width:70px; background-image: url(http://www.maptiler.org/img/opacity-slider.png)" ></div>';
+                      container.innerHTML = '<div style="height:21px; width:70px; background-image: url(https://gdal.org/resources/gdal2tiles/opacity-slider.png)" ></div>';
                     }
 
                     // create the knob as a GDraggableObject
                     // Handle transparent PNG files in MSIE
                     if (this.ie) {
-                      var loader = "progid:DXImageTransform.Microsoft.AlphaImageLoader(src='http://www.maptiler.org/img/opacity-slider.png', sizingMethod='crop');";
+                      var loader = "progid:DXImageTransform.Microsoft.AlphaImageLoader(src='https://gdal.org/resources/gdal2tiles/opacity-slider.png', sizingMethod='crop');";
                       this.knob = document.createElement("div");
                       this.knob.style.height="21px";
                       this.knob.style.width="13px";
@@ -2425,7 +2485,7 @@ class GDAL2Tiles(object):
                       this.knob = document.createElement("div");
                       this.knob.style.height="21px";
                       this.knob.style.width="13px";
-                      this.knob.style.backgroundImage="url(http://www.maptiler.org/img/opacity-slider.png)";
+                      this.knob.style.backgroundImage="url(https://gdal.org/resources/gdal2tiles/opacity-slider.png)";
                       this.knob.style.backgroundPosition="-70px 0px";
                     }
                     container.appendChild(this.knob);
@@ -2518,7 +2578,7 @@ class GDAL2Tiles(object):
                       var mercator = new GMercatorProjection(mapMaxZoom+1);
                       tilelayer.getTileUrl = function(tile,zoom) {
                           if ((zoom < mapMinZoom) || (zoom > mapMaxZoom)) {
-                              return "http://www.maptiler.org/img/none.png";
+                              return "https://gdal.org/resources/gdal2tiles/none.png";
                           }
                           var ymax = 1 << zoom;
                           var y = ymax - tile.y -1;
@@ -2529,7 +2589,7 @@ class GDAL2Tiles(object):
                           if (mapBounds.intersects(tileBounds)) {
                               return zoom+"/"+tile.x+"/"+y+".png";
                           } else {
-                              return "http://www.maptiler.org/img/none.png";
+                              return "https://gdal.org/resources/gdal2tiles/none.png";
                           }
                       }
                       // IE 7-: support for PNG alpha channel
@@ -2588,8 +2648,8 @@ class GDAL2Tiles(object):
                 </script>
               </head>
               <body onload="load()">
-                  <div id="header"><h1>%(title)s</h1></div>
-                  <div id="subheader">Generated by <a href="http://www.klokan.cz/projects/gdal2tiles/">GDAL2Tiles</a>, Copyright &copy; 2008 <a href="http://www.klokan.cz/">Klokan Petr Pridal</a>,  <a href="http://www.gdal.org/">GDAL</a> &amp; <a href="http://www.osgeo.org/">OSGeo</a> <a href="http://code.google.com/soc/">GSoC</a>
+                  <div id="header"><h1>%(xml_escaped_title)s</h1></div>
+                  <div id="subheader">Generated by <a href="https://gdal.org/programs/gdal2tiles.html">GDAL2Tiles</a>, Copyright &copy; 2008 <a href="http://www.klokan.cz/">Klokan Petr Pridal</a>,  <a href="https://gdal.org">GDAL</a> &amp; <a href="http://www.osgeo.org/">OSGeo</a> <a href="http://code.google.com/soc/">GSoC</a>
             <!-- PLEASE, LET THIS NOTE ABOUT AUTHOR AND PROJECT SOMEWHERE ON YOUR WEBSITE, OR AT LEAST IN THE COMMENT IN HTML. THANK YOU -->
                   </div>
                    <div id="map"></div>
@@ -2607,8 +2667,8 @@ class GDAL2Tiles(object):
         """
 
         args = {}
-        args['title'] = self.options.title.replace('"', '\\"')
-        args['htmltitle'] = self.options.title
+        args['double_quote_escaped_title'] = self.options.title.replace('"', '\\"')
+        args['xml_escaped_title'] = gdal.EscapeString(self.options.title, gdal.CPLES_XML)
         args['south'], args['west'], args['north'], args['east'] = self.swne
         args['centerlon'] = (args['north'] + args['south']) / 2.
         args['centerlat'] = (args['west'] + args['east']) / 2.
@@ -2630,7 +2690,7 @@ class GDAL2Tiles(object):
           <head>
             <meta charset="utf-8">
             <meta name='viewport' content='width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no' />
-            <title>%(htmltitle)s</title>
+            <title>%(xml_escaped_title)s</title>
 
             <!-- Leaflet -->
             <link rel="stylesheet" href="https://unpkg.com/leaflet@0.7.5/dist/leaflet.css" />
@@ -2702,12 +2762,12 @@ class GDAL2Tiles(object):
             return this._div;
         };
         title.update = function(props) {
-            this._div.innerHTML = "%(title)s";
+            this._div.innerHTML = "%(double_quote_escaped_title)s";
         };
         title.addTo(map);
 
         // Note
-        var src = 'Generated by <a href="http://www.klokan.cz/projects/gdal2tiles/">GDAL2Tiles</a>, Copyright &copy; 2008 <a href="http://www.klokan.cz/">Klokan Petr Pridal</a>,  <a href="http://www.gdal.org/">GDAL</a> &amp; <a href="http://www.osgeo.org/">OSGeo</a> <a href="http://code.google.com/soc/">GSoC</a>';
+        var src = 'Generated by <a href="https://gdal.org/programs/gdal2tiles.html">GDAL2Tiles</a>, Copyright &copy; 2008 <a href="http://www.klokan.cz/">Klokan Petr Pridal</a>,  <a href="https://gdal.org">GDAL</a> &amp; <a href="http://www.osgeo.org/">OSGeo</a> <a href="http://code.google.com/soc/">GSoC</a>';
         var title = L.control({position: 'bottomleft'});
         title.onAdd = function(map) {
             this._div = L.DomUtil.create('div', 'ctl src');
@@ -2743,7 +2803,7 @@ class GDAL2Tiles(object):
         """
 
         args = {}
-        args['title'] = self.options.title
+        args['xml_escaped_title'] = gdal.EscapeString(self.options.title, gdal.CPLES_XML)
         args['bingkey'] = self.options.bingkey
         args['minzoom'] = self.tminz
         args['maxzoom'] = self.tmaxz
@@ -2766,7 +2826,7 @@ class GDAL2Tiles(object):
         s = r"""<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
     <head>
-    <title>%(title)s</title>
+    <title>%(xml_escaped_title)s</title>
     <meta http-equiv='imagetoolbar' content='no'/>
     <style type="text/css"> v\:* {behavior:url(#default#VML);}
         html, body { overflow: hidden; padding: 0; height: 100%%; width: 100%%; font-family: 'Lucida Grande',Geneva,Arial,Verdana,sans-serif; }
@@ -2782,7 +2842,7 @@ class GDAL2Tiles(object):
     <link rel="stylesheet" href="https://unpkg.com/ol-layerswitcher@3.5.0/src/ol-layerswitcher.css" />
 </head>
 <body>
-    <div id="header"><h1>%(title)s</h1></div>
+    <div id="header"><h1>%(xml_escaped_title)s</h1></div>
     <div id="subheader">Generated by <a href="https://gdal.org/programs/gdal2tiles.html">GDAL2Tiles</a>&nbsp;&nbsp;&nbsp;&nbsp;</div>
     <div id="map" class="map"></div>
     <div id="mouse-position"></div>
@@ -3178,32 +3238,65 @@ def single_threaded_tiling(input_file: str, output_folder: str, options: Options
         print("Tiles details calc complete.")
 
     if not options.verbose and not options.quiet:
-        progress_bar = ProgressBar(len(tile_details))
-        progress_bar.start()
+        base_progress_bar = ProgressBar(len(tile_details))
+        base_progress_bar.start()
 
     for tile_detail in tile_details:
         create_base_tile(conf, tile_detail)
 
         if not options.verbose and not options.quiet:
-            progress_bar.log_progress()
+            base_progress_bar.log_progress()
 
     if getattr(threadLocal, 'cached_ds', None):
         del threadLocal.cached_ds
 
-    create_overview_tiles(conf, output_folder, options)
+    if not options.quiet:
+        count = count_overview_tiles(conf)
+        if count:
+            print("Generating Overview Tiles:")
+
+            if not options.verbose:
+                overview_progress_bar = ProgressBar(count)
+                overview_progress_bar.start()
+
+    for base_tz in range(conf.tmaxz, conf.tminz, -1):
+        base_tile_groups = group_overview_base_tiles(base_tz, output_folder, conf)
+        for base_tiles in base_tile_groups:
+            create_overview_tile(base_tz, base_tiles, output_folder, conf, options)
+            if not options.verbose and not options.quiet:
+                overview_progress_bar.log_progress()
+
 
     shutil.rmtree(os.path.dirname(conf.src_file))
 
 
-def multi_threaded_tiling(input_file: str, output_folder: str, options: Options) -> None:
+def multi_threaded_tiling(input_file: str, output_folder: str, options: Options, pool) -> None:
     nb_processes = options.nb_processes or 1
 
-    # Make sure that all processes do not consume more than `gdal.GetCacheMax()`
     gdal_cache_max = gdal.GetCacheMax()
-    gdal_cache_max_per_process = max(1024 * 1024, math.floor(gdal_cache_max / nb_processes))
-    set_cache_max(gdal_cache_max_per_process)
 
-    pool = Pool(processes=nb_processes)
+    if pool is not None:
+        # copy interface of multiprocessing.Pool to MPIPoolExecutor
+        def pool_imap_unordered(self, func, data, **kwargs):
+            return self.map(func, data, **kwargs, unordered=True)
+        pool.imap_unordered = pool_imap_unordered.__get__(pool)
+        def pool_close(self):
+            pass
+        pool.close = pool_close.__get__(pool)
+        def pool_join(self):
+            self.shutdown()
+        pool.join = pool_join.__get__(pool)
+    else:
+        # Trick inspired from https://stackoverflow.com/questions/45720153/python-multiprocessing-error-attributeerror-module-main-has-no-attribute
+        # and https://bugs.python.org/issue42949
+        import __main__
+        if not hasattr(__main__, '__spec__'):
+            __main__.__spec__ = None
+        from multiprocessing import Pool
+        # Make sure that all processes do not consume more than `gdal.GetCacheMax()`
+        gdal_cache_max_per_process = max(1024 * 1024, math.floor(gdal_cache_max / nb_processes))
+        set_cache_max(gdal_cache_max_per_process)
+        pool = Pool(processes=nb_processes)
 
     if options.verbose:
         print("Begin tiles details calc")
@@ -3214,22 +3307,38 @@ def multi_threaded_tiling(input_file: str, output_folder: str, options: Options)
         print("Tiles details calc complete.")
 
     if not options.verbose and not options.quiet:
-        progress_bar = ProgressBar(len(tile_details))
-        progress_bar.start()
+        base_progress_bar = ProgressBar(len(tile_details))
+        base_progress_bar.start()
 
     # TODO: gbataille - check the confs for which each element is an array... one useless level?
     # TODO: gbataille - assign an ID to each job for print in verbose mode "ReadRaster Extent ..."
-    for _ in pool.imap_unordered(partial(create_base_tile, conf), tile_details, chunksize=128):
+    chunksize = max(1, min(128, len(tile_details) // nb_processes))
+    for _ in pool.imap_unordered(partial(create_base_tile, conf), tile_details, chunksize=chunksize):
         if not options.verbose and not options.quiet:
-            progress_bar.log_progress()
+            base_progress_bar.log_progress()
+
+    if not options.quiet:
+        count = count_overview_tiles(conf)
+        if count:
+            print("Generating Overview Tiles:")
+
+            if not options.verbose:
+                overview_progress_bar = ProgressBar(count)
+                overview_progress_bar.start()
+
+    for base_tz in range(conf.tmaxz, conf.tminz, -1):
+        base_tile_groups = group_overview_base_tiles(base_tz, output_folder, conf)
+        chunksize = max(1, min(128, len(base_tile_groups) // nb_processes))
+        for _ in pool.imap_unordered(partial(create_overview_tile, base_tz, output_folder=output_folder,
+                                             tile_job_info=conf, options=options), base_tile_groups, chunksize=chunksize):
+            if not options.verbose and not options.quiet:
+                overview_progress_bar.log_progress()
 
     pool.close()
     pool.join()     # Jobs finished
 
     # Set the maximum cache back to the original value
     set_cache_max(gdal_cache_max)
-
-    create_overview_tiles(conf, output_folder, options)
 
     shutil.rmtree(os.path.dirname(conf.src_file))
 
@@ -3245,16 +3354,39 @@ def main(argv: List[str]) -> int:
         if argv[i] == '--config' and i + 2 < len(argv):
             os.environ[argv[i+1]] = argv[i+2]
 
+    if '--mpi' in argv:
+        from mpi4py import MPI
+        from mpi4py.futures import MPICommExecutor
+        with MPICommExecutor(MPI.COMM_WORLD, root=0) as pool:
+            if pool is None:
+                return 0
+            return submain(argv, pool, MPI.COMM_WORLD.Get_size())
+    else:
+        return submain(argv)
+
+
+def submain(argv: List[str], pool=None, pool_size=0) -> int:
+
     argv = gdal.GeneralCmdLineProcessor(argv)
     if argv is None:
         return 0
     input_file, output_folder, options = process_args(argv[1:])
+    if pool_size:
+        options.nb_processes = pool_size
     nb_processes = options.nb_processes or 1
 
-    if nb_processes == 1:
-        single_threaded_tiling(input_file, output_folder, options)
-    else:
-        multi_threaded_tiling(input_file, output_folder, options)
+    old_used_exceptions = gdal.GetUseExceptions()
+    if not old_used_exceptions:
+        gdal.UseExceptions()
+
+    try:
+        if nb_processes == 1 and not options.mpi:
+            single_threaded_tiling(input_file, output_folder, options)
+        else:
+            multi_threaded_tiling(input_file, output_folder, options, pool)
+    finally:
+        if not old_used_exceptions:
+            gdal.DontUseExceptions()
 
     return 0
 

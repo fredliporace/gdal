@@ -2035,9 +2035,9 @@ GDALResampleChunk32R_Gauss( double dfXRatioDstToSrc, double dfYRatioDstToSrc,
                         if( colorEntries[idx].c4 )
                         {
                             const int nWeight = panLineWeight[i];
-                            nTotalR += colorEntries[idx].c1 * nWeight;
-                            nTotalG += colorEntries[idx].c2 * nWeight;
-                            nTotalB += colorEntries[idx].c3 * nWeight;
+                            nTotalR += static_cast<GInt64>(colorEntries[idx].c1 * nWeight);
+                            nTotalG += static_cast<GInt64>(colorEntries[idx].c2 * nWeight);
+                            nTotalB += static_cast<GInt64>(colorEntries[idx].c3 * nWeight);
                             nTotalWeight += nWeight;
                         }
                     }
@@ -3512,7 +3512,10 @@ static CPLErr GDALResampleChunk32R_Convolution(
     if( EQUAL(pszResampling, "BILINEAR") )
         eResample = GRA_Bilinear;
     else if( EQUAL(pszResampling, "CUBIC") )
+    {
         eResample = GRA_Cubic;
+        bKernelWithNegativeWeights = true;
+    }
     else if( EQUAL(pszResampling, "CUBICSPLINE") )
         eResample = GRA_CubicSpline;
     else if( EQUAL(pszResampling, "LANCZOS") )
@@ -4119,6 +4122,10 @@ GDALRegenerateOverviews( GDALRasterBandH hSrcBand,
                     "will probably lead to unexpected results." );
                 poColorTable = nullptr;
             }
+            else if( poColorTable->IsIdentity() )
+            {
+                poColorTable = nullptr;
+            }
         }
         else
         {
@@ -4206,20 +4213,6 @@ GDALRegenerateOverviews( GDALRasterBandH hSrcBand,
     int nFRYBlockSize = 0;
     poSrcBand->GetBlockSize( &nFRXBlockSize, &nFRYBlockSize );
 
-    int nFullResYChunk = 0;
-    if( nFRYBlockSize < 16 || nFRYBlockSize > 256 )
-        nFullResYChunk = 64;
-    else
-        nFullResYChunk = nFRYBlockSize;
-
-    // Only configurable for debug / testing
-    const char* pszChunkYSize = CPLGetConfigOption("GDAL_OVR_CHUNKYSIZE", nullptr);
-    if( pszChunkYSize )
-    {
-        // coverity[tainted_data]
-        nFullResYChunk = atoi(pszChunkYSize);
-    }
-
     const GDALDataType eSrcDataType = poSrcBand->GetRasterDataType();
     const GDALDataType eWrkDataType = GDALDataTypeIsComplex( eSrcDataType )?
         GDT_CFloat32 :
@@ -4240,10 +4233,70 @@ GDALRegenerateOverviews( GDALRasterBandH hSrcBand,
             nMaxOvrFactor,
             static_cast<int>(static_cast<double>(nHeight) / nDstHeight + 0.5) );
     }
-    // Make sure that round(nChunkYOff / nMaxOvrFactor) < round((nChunkYOff + nFullResYChunk) / nMaxOvrFactor)
-    nFullResYChunk = std::max(nFullResYChunk, 2 * nMaxOvrFactor);
-    const int nMaxChunkYSizeQueried =
-        nFullResYChunk + 2 * nKernelRadius * nMaxOvrFactor;
+
+    int nFullResYChunk = nFRYBlockSize;
+    int nMaxChunkYSizeQueried = 0;
+
+    const auto UpdateChunkHeightAndGetChunkSize = [
+        &nFullResYChunk, &nMaxChunkYSizeQueried, nKernelRadius, nMaxOvrFactor, eWrkDataType, nWidth]()
+    {
+        // Make sure that round(nChunkYOff / nMaxOvrFactor) < round((nChunkYOff + nFullResYChunk) / nMaxOvrFactor)
+        nFullResYChunk = std::max(nFullResYChunk, 2 * nMaxOvrFactor);
+        nMaxChunkYSizeQueried =
+            nFullResYChunk + 2 * nKernelRadius * nMaxOvrFactor;
+        return static_cast<GIntBig>(GDALGetDataTypeSizeBytes(eWrkDataType)) *
+            nMaxChunkYSizeQueried * nWidth;
+    };
+
+    // Only configurable for debug / testing
+    const char* pszChunkYSize = CPLGetConfigOption("GDAL_OVR_CHUNKYSIZE", nullptr);
+    if( pszChunkYSize )
+    {
+        // coverity[tainted_data]
+        nFullResYChunk = atoi(pszChunkYSize);
+    }
+
+    // Only configurable for debug / testing
+    const int nChunkMaxSize =
+        atoi(CPLGetConfigOption("GDAL_OVR_CHUNK_MAX_SIZE", "10485760"));
+
+    auto nChunkSize = UpdateChunkHeightAndGetChunkSize();
+    if( nChunkSize > nChunkMaxSize )
+    {
+        if( poColorTable == nullptr && nFRXBlockSize < nWidth &&
+            !GDALDataTypeIsComplex( eSrcDataType ) &&
+            (!STARTS_WITH_CI(pszResampling, "AVER") ||
+             EQUAL(pszResampling, "AVERAGE")) )
+        {
+            // If this is tiled, then use GDALRegenerateOverviewsMultiBand()
+            // which use a block based strategy, which is much less memory
+            // hungry.
+            return GDALRegenerateOverviewsMultiBand(1, &poSrcBand,
+                                                    nOverviewCount,
+                                                    &papoOvrBands,
+                                                    pszResampling,
+                                                    pfnProgress,
+                                                    pProgressData);
+        }
+        else if( nOverviewCount > 1 && STARTS_WITH_CI(pszResampling, "NEAR") )
+        {
+            return GDALRegenerateCascadingOverviews(poSrcBand,
+                                                    nOverviewCount,
+                                                    papoOvrBands,
+                                                    pszResampling,
+                                                    pfnProgress,
+                                                    pProgressData );
+        }
+    }
+    else if( pszChunkYSize == nullptr )
+    {
+        // Try to get as close as possible to nChunkMaxSize
+        while( nChunkSize * 2 < nChunkMaxSize )
+        {
+            nFullResYChunk *= 2;
+            nChunkSize = UpdateChunkHeightAndGetChunkSize();
+        }
+    }
 
     int bHasNoData = FALSE;
     const float fNoDataValue =

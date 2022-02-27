@@ -1,4 +1,4 @@
-# Distributed under the GDAL/OGR MIT/X style License.  See accompanying file LICENSE.TXT.
+# Distributed under the GDAL/OGR MIT style License.  See accompanying file LICENSE.TXT.
 
 #[=======================================================================[.rst:
 configure
@@ -28,146 +28,36 @@ if (CMAKE_GENERATOR_TOOLSET MATCHES "v([0-9]+)_xp")
 endif ()
 
 check_function_exists(vsnprintf HAVE_VSNPRINTF)
-check_function_exists(snprintf HAVE_SNPRINTF)
 check_function_exists(getcwd HAVE_GETCWD)
 
-check_include_file("assert.h" HAVE_ASSERT_H)
 check_include_file("fcntl.h" HAVE_FCNTL_H)
 check_include_file("unistd.h" HAVE_UNISTD_H)
-check_include_file("stdint.h" HAVE_STDINT_H)
 check_include_file("sys/types.h" HAVE_SYS_TYPES_H)
 check_include_file("locale.h" HAVE_LOCALE_H)
-check_include_file("errno.h" HAVE_ERRNO_H)
+check_include_file("xlocale.h" GDAL_HAVE_XLOCALE_H)
 check_include_file("direct.h" HAVE_DIRECT_H)
 check_include_file("dlfcn.h" HAVE_DLFCN_H)
 
 check_type_size("int" SIZEOF_INT)
 check_type_size("unsigned long" SIZEOF_UNSIGNED_LONG)
 check_type_size("void*" SIZEOF_VOIDP)
-set(HAVE_LONG_LONG 1)
-
-# check_include_file("ieeefp.h" HAVE_IEEEFP_H) if(HAVE_IEEEFP_H)
-set(HAVE_IEEEFP TRUE)
-# endif()
-
-if (SQLITE3_FOUND AND NOT WITH_SQLITE3_EXTERNAL)
-  set(SQLITE_COL_TEST_CODE
-      "#ifdef __cplusplus
-extern \"C\"
-#endif
-char sqlite3_column_table_name ();
-int
-main ()
-{
-return sqlite3_column_table_name ();
-  return 0;
-}
-")
-  check_c_source_compiles("${SQLITE_COL_TEST_CODE}" SQLITE_HAS_COLUMN_METADATA)
-else ()
-  set(SQLITE_HAS_COLUMN_METADATA ON)
-endif ()
-
-check_function_exists("atoll" HAVE_ATOLL)
-check_function_exists("strtof" HAVE_DECL_STRTOF)
-
-if (Iconv_FOUND)
-  set(CMAKE_REQUIRED_INCLUDES ${Iconv_INCLUDE_DIR})
-  set(CMAKE_REQUIRED_LIBRARIES ${Iconv_LIBRARY})
-  if (MSVC)
-    set(CMAKE_REQUIRED_FLAGS "/WX")
-  else ()
-    set(CMAKE_REQUIRED_FLAGS "-Werror")
-  endif ()
-
-  set(ICONV_CONST_TEST_CODE
-      "#include <stdlib.h>
-    #include <iconv.h>
-    #ifdef __cplusplus
-    extern \"C\"
-    #endif
-
-    int main(){
-    #if defined(__STDC__) || defined(__cplusplus)
-      iconv_t conv = 0;
-      char* in = 0;
-      size_t ilen = 0;
-      char* out = 0;
-      size_t olen = 0;
-      size_t ret = iconv(conv, &in, &ilen, &out, &olen);
-    #else
-      size_t ret = iconv();
-    #endif
-      return 0;
-    }")
-  if (CMAKE_C_COMPILER_LOADED)
-    check_c_source_compiles("${ICONV_CONST_TEST_CODE}" _ICONV_SECOND_ARGUMENT_IS_NOT_CONST)
-  elseif (CMAKE_CXX_COMPILER_LOADED)
-    check_cxx_source_compiles("${ICONV_CONST_TEST_CODE}" _ICONV_SECOND_ARGUMENT_IS_NOT_CONST)
-  endif ()
-  if (_ICONV_SECOND_ARGUMENT_IS_NOT_CONST)
-    set(ICONV_CPP_CONST "")
-  else ()
-    set(ICONV_CPP_CONST "const")
-  endif ()
-  unset(ICONV_CONST_TEST_CODE)
-  unset(_ICONV_SECOND_ARGUMENT_IS_NOT_CONST)
-  unset(CMAKE_REQUIRED_INCLUDES)
-  unset(CMAKE_REQUIRED_LIBRARIES)
-  unset(CMAKE_REQUIRED_FLAGS)
-endif ()
 
 if (MSVC)
-  check_include_file("search.h" HAVE_SEARCH_H)
-  check_function_exists(localtime_r HAVE_LOCALTIME_R)
-  check_function_exists("fopen64" HAVE_FOPEN64)
-  check_function_exists("stat64" HAVE_STAT64)
-
-  if (NOT CPL_DISABLE_STDCALL)
-    set(CPL_STDCALL __stdcall)
-  endif ()
-
-  set(HAVE_DOPRNT 0)
-  set(HAVE_VPRINTF 1)
   set(HAVE_VSNPRINTF 1)
-  set(HAVE_SNPRINTF 1)
-  if (MSVC_VERSION LESS 1900)
-    set(snprintf _snprintf)
-  endif ()
 
-  set(HAVE_GETCWD 1)
-  if (NOT DEFINED (getcwd))
-    set(getcwd _getcwd)
-  endif ()
-
-  set(HAVE_ASSERT_H 1)
   set(HAVE_FCNTL_H 1)
   set(HAVE_UNISTD_H 0)
-  set(HAVE_STDINT_H 0)
   set(HAVE_SYS_TYPES_H 1)
-  set(HAVE_LIBDL 0)
   set(HAVE_LOCALE_H 1)
-  set(HAVE_FLOAT_H 1)
-  set(HAVE_ERRNO_H 1)
   set(HAVE_SEARCH_H 1)
   set(HAVE_DIRECT_H 1)
 
   set(HAVE_LOCALTIME_R 0)
   set(HAVE_DLFCN_H 1)
-  set(HOST_FILLORDER FILLORDER_LSB2MSB)
-  set(HAVE_IEEEFP 1)
-
-  if (NOT __cplusplus)
-    if (NOT inline)
-      set(inline __inline)
-    endif ()
-  endif ()
-
-  set(lfind _lfind)
 
   set(VSI_STAT64 _stat64)
   set(VSI_STAT64_T __stat64)
-else (MSVC)
+else ()
   # linux, mac and mingw/windows
   test_big_endian(WORDS_BIGENDIAN)
   if (MINGW)
@@ -181,9 +71,11 @@ else (MSVC)
   endif ()
 
   find_library(M_LIB m)
+  mark_as_advanced(M_LIB)
 
   option(GDAL_USE_CPL_MULTIPROC_PTHREAD "Set to ON if you want to use pthreads based multiprocessing support."
          ${_WITH_PT_OPTION_ON})
+  mark_as_advanced(GDAL_USE_CPL_MULTIPROC_PTHREAD)
   set(CPL_MULTIPROC_PTHREAD ${GDAL_USE_CPL_MULTIPROC_PTHREAD})
   check_c_source_compiles(
     "
@@ -217,21 +109,27 @@ else (MSVC)
         "
     HAVE_5ARGS_MREMAP)
 
-  check_include_file("inttypes.h" HAVE_INTTYPES_H)
-
-  check_include_file("strings.h" HAVE_STRINGS_H)
-  check_include_file("string.h" HAVE_STRING_H)
-
-  check_function_exists(strtof HAVE_STRTOF)
-
   check_include_file("sys/stat.h" HAVE_SYS_STAT_H)
+  if (${CMAKE_SYSTEM} MATCHES "Linux")
+      check_include_file("linux/fs.h" HAVE_LINUX_FS_H)
+      if( NOT HAVE_LINUX_FS_H )
+        message(FATAL_ERROR "Required linux/fs.h file is missing.")
+      endif()
+  endif ()
 
   check_function_exists(readlink HAVE_READLINK)
   check_function_exists(posix_spawnp HAVE_POSIX_SPAWNP)
+  check_function_exists(posix_memalign HAVE_POSIX_MEMALIGN)
   check_function_exists(vfork HAVE_VFORK)
   check_function_exists(mmap HAVE_MMAP)
+  check_function_exists(sigaction HAVE_SIGACTION)
   check_function_exists(statvfs HAVE_STATVFS)
+  check_function_exists(statvfs64 HAVE_STATVFS64)
   check_function_exists(lstat HAVE_LSTAT)
+
+  check_function_exists(getrlimit HAVE_GETRLIMIT)
+  check_symbol_exists(RLIMIT_AS "sys/resource.h" HAVE_RLIMIT_AS)
+
   check_function_exists(ftell64 HAVE_FTELL64)
   if (HAVE_FTELL64)
     set(VSI_FTELL64 "ftell64")
@@ -329,12 +227,16 @@ else (MSVC)
   endif ()
 
   set(UNIX_STDIO_64 TRUE)
-  set(VSI_LARGE_API_SUPPORTED TRUE)
 
+  set(INCLUDE_XLOCALE_H)
+  if(GDAL_HAVE_XLOCALE_H)
+    set(INCLUDE_XLOCALE_H "#include <xlocale.h>")
+  endif()
   check_c_source_compiles(
     "
         #define _XOPEN_SOURCE 700
         #include <locale.h>
+        ${INCLUDE_XLOCALE_H}
         int main() {
             locale_t alocale = newlocale (LC_NUMERIC_MASK, \"C\", 0);
             locale_t oldlocale = uselocale(alocale);
@@ -363,12 +265,9 @@ else (MSVC)
 
   check_c_source_compiles(
     "
-        #include <sys/types.h>
-        #include <sys/socket.h>
-        #include <netdb.h>
-        int main() { getaddrinfo(0,0,0,0); return 0; }
+        int main(int argc, char** argv) { (void)__builtin_bswap32(0); (void)__builtin_bswap64(0); return 0; }
     "
-    HAVE_GETADDRINFO)
+    HAVE_GCC_BSWAP)
 
   check_c_source_compiles(
     "
@@ -379,7 +278,7 @@ else (MSVC)
 
   include(FindInt128)
   if (INT128_FOUND)
-    add_definitions(-DHAVE_UINT128_T)
+    set(HAVE_UINT128_T TRUE)
   endif ()
 
   if (HAVE_HIDE_INTERNAL_SYMBOLS)
@@ -389,36 +288,22 @@ else (MSVC)
     endif ()
   endif ()
 
-  if (HAVE_STDDEF_H AND HAVE_STDINT_H)
-    set(STDC_HEADERS TRUE)
-  endif (HAVE_STDDEF_H AND HAVE_STDINT_H)
-
   message(STATUS "checking if sprintf can be overloaded for GDAL compilation")
   check_cxx_source_compiles(
     "#define _XOPEN_SOURCE\n#include <vector>\n#include <stdio.h>\nextern \"C\"\n {int sprintf(char *str, const char* fmt, ...);}"
     DEPRECATE_SPRINTF)
   if (NOT DEPRECATE_SPRINTF)
     set(DONT_DEPRECATE_SPRINTF 1)
-    add_definitions(-DDONT_DEPRECATE_SRPINTF)
+    add_definitions(-DDONT_DEPRECATE_SPRINTF)
   endif ()
 
   check_include_file("linux/userfaultfd.h" HAVE_USERFAULTFD_H)
 endif ()
 
-if (WORDS_BIGENDIAN)
-  set(HOST_FILLORDER FILLORDER_MSB2LSB)
+if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+  set(MACOSX_FRAMEWORK ${GDAL_ENABLE_MACOSX_FRAMEWORK})
 else ()
-  set(HOST_FILLORDER FILLORDER_LSB2MSB)
+  set(MACOSX_FRAMEWORK OFF)
 endif ()
-
-if (UNIX)
-  if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-    set(MACOSX_FRAMEWORK ON)
-  else ()
-    set(MACOSX_FRAMEWORK OFF)
-  endif ()
-endif ()
-
-configure_file(${GDAL_CMAKE_TEMPLATE_PATH}/cpl_config.h.in ${PROJECT_BINARY_DIR}/port/cpl_config.h @ONLY)
 
 # vim: ts=4 sw=4 sts=4 et

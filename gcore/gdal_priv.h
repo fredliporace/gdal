@@ -437,6 +437,9 @@ class CPL_DLL GDALDataset : public GDALMajorObject
     void  ShareLockWithParentDataset(GDALDataset* poParentDataset);
 
 //! @endcond
+
+    void                CleanupPostFileClosing();
+
     virtual int         CloseDependentDatasets();
 //! @cond Doxygen_Suppress
     int                 ValidateLayerCreationOptions( const char* const* papszLCO );
@@ -599,8 +602,7 @@ class CPL_DLL GDALDataset : public GDALMajorObject
     int           GetShared() const;
     void          MarkAsShared();
 
-    /** Set that the dataset must be deleted on close. */
-    void          MarkSuppressOnClose() { bSuppressOnClose = true; }
+    void          MarkSuppressOnClose();
 
     /** Return open options.
      * @return open options.
@@ -796,10 +798,18 @@ private:
 
     virtual int         TestCapability( const char * );
 
+    virtual std::vector<std::string> GetFieldDomainNames(CSLConstList papszOptions = nullptr) const;
+
     virtual const OGRFieldDomain* GetFieldDomain(const std::string& name) const;
 
     virtual bool        AddFieldDomain(std::unique_ptr<OGRFieldDomain>&& domain,
                                        std::string& failureReason);
+
+    virtual bool        DeleteFieldDomain(const std::string& name,
+                                          std::string& failureReason);
+
+    virtual bool        UpdateFieldDomain(std::unique_ptr<OGRFieldDomain>&& domain,
+                                          std::string& failureReason);
 
     virtual OGRLayer   *CreateLayer( const char *pszName,
                                      OGRSpatialReference *poSpatialRef = nullptr,
@@ -1040,6 +1050,7 @@ public:
     void          SetColorEntry( int, const GDALColorEntry * );
     int           CreateColorRamp( int, const GDALColorEntry * ,
                                    int, const GDALColorEntry * );
+    bool          IsIdentity() const;
 
     /** Convert a GDALColorTable* to a GDALRasterBandH.
      * @since GDAL 2.3
@@ -1601,7 +1612,7 @@ class CPL_DLL GDALDriver : public GDALMajorObject
                                            void * pProgressData );
 //! @endcond
     static CPLErr       QuietDelete( const char * pszName,
-                                     const char *const *papszAllowedDrivers = nullptr);
+                                     CSLConstList papszAllowedDrivers = nullptr);
 
 //! @cond Doxygen_Suppress
     static CPLErr       DefaultRename( const char * pszNewName,
@@ -1642,13 +1653,16 @@ class CPL_DLL GDALDriverManager : public GDALMajorObject
     int         nDrivers = 0;
     GDALDriver  **papoDrivers = nullptr;
     std::map<CPLString, GDALDriver*> oMapNameToDrivers{};
+    std::string                      m_osDriversIniPath{};
 
     GDALDriver  *GetDriver_unlocked( int iDriver )
             { return (iDriver >= 0 && iDriver < nDrivers) ?
                   papoDrivers[iDriver] : nullptr; }
 
-    GDALDriver  *GetDriverByName_unlocked( const char * pszName )
-            { return oMapNameToDrivers[CPLString(pszName).toupper()]; }
+    GDALDriver  *GetDriverByName_unlocked( const char * pszName ) const
+            { auto oIter = oMapNameToDrivers.find(CPLString(pszName).toupper());
+              return oIter == oMapNameToDrivers.end() ? nullptr : oIter->second;
+            }
 
     static char** GetSearchPaths(const char* pszGDAL_DRIVER_PATH);
 
@@ -1668,8 +1682,9 @@ class CPL_DLL GDALDriverManager : public GDALMajorObject
     void        DeregisterDriver( GDALDriver * );
 
     // AutoLoadDrivers is a no-op if compiled with GDAL_NO_AUTOLOAD defined.
-    static void        AutoLoadDrivers();
-    void        AutoSkipDrivers();
+    void               AutoLoadDrivers();
+    void               AutoSkipDrivers();
+    void               ReorderDrivers();
 
     static void        AutoLoadPythonDrivers();
 };

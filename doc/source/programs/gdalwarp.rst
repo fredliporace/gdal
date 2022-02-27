@@ -95,6 +95,7 @@ with control information.
 .. option:: -to <NAME=VALUE>
 
     Set a transformer option suitable to pass to :cpp:func:`GDALCreateGenImgProjTransformer2`.
+    See :cpp:func:`GDALCreateRPCTransformerV2()` for RPC specific options.
 
 .. option:: -vshift
 
@@ -133,7 +134,7 @@ with control information.
 .. option:: -et <err_threshold>
 
     Error threshold for transformation approximation (in pixel units -
-    defaults to 0.125, unless, starting with GDAL 2.1, the RPC_DEM warping
+    defaults to 0.125, unless, starting with GDAL 2.1, the RPC_DEM transformer
     option is specified, in which case, an exact transformer, i.e.
     err_threshold=0, will be used).
 
@@ -222,7 +223,7 @@ with control information.
 
     ``rms`` root mean square / quadratic mean of all non-NODATA contributing pixels (GDAL >= 3.3)
 
-    ``mode``: mode resampling, selects the value which appears most often of all the sampled points.
+    ``mode``: mode resampling, selects the value which appears most often of all the sampled points. In the case of ties, the first value identified as the mode will be selected.
 
     ``max``: maximum resampling, selects the maximum value from all non-NODATA contributing pixels.
 
@@ -329,7 +330,10 @@ with control information.
 
 .. option:: -overwrite
 
-    Overwrite the target dataset if it already exists.
+    Overwrite the target dataset if it already exists. Overwriting must be understood
+    here as deleting and recreating the file from scratch. Note that if this option
+    is *not* specified and the output file already exists, it will be updated in
+    place.
 
 .. option:: -nomd
 

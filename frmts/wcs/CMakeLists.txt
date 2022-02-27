@@ -1,4 +1,4 @@
-if (GDAL_ENABLE_FRMT_WCS)
+if (GDAL_ENABLE_DRIVER_WCS)
   add_gdal_driver(
     TARGET gdal_WCS
     SOURCES gmlcoverage.cpp
@@ -17,7 +17,7 @@ if (GDAL_ENABLE_FRMT_WCS)
   target_include_directories(gdal_WCS PRIVATE ${GDAL_VECTOR_FORMAT_SOURCE_DIR}/gml)
 endif ()
 
-if (GDAL_ENABLE_FRMT_HTTP)
+if (GDAL_ENABLE_DRIVER_HTTP)
   add_gdal_driver(TARGET gdal_HTTP SOURCES httpdriver.cpp PLUGIN_CAPABLE NO_DEPS)
   gdal_standard_includes(gdal_HTTP)
 endif ()

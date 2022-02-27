@@ -30,6 +30,9 @@
 ###############################################################################
 
 import gdaltest
+import os
+import shutil
+import sys
 from osgeo import gdal
 from osgeo import osr
 
@@ -579,3 +582,81 @@ def test_vrtmisc_coordinate_epoch():
     ds = None
 
     gdal.Unlink(filename)
+
+
+###############################################################################
+# Test the relativeToVRT attribute of SourceFilename
+
+def test_vrtmisc_sourcefilename_all_relatives():
+
+    shutil.copy('data/byte.tif', 'tmp')
+
+    try:
+        src_ds = gdal.Open(os.path.join('tmp', 'byte.tif'))
+        ds = gdal.GetDriverByName('VRT').CreateCopy('', src_ds)
+        ds.SetDescription(os.path.join('tmp', 'byte.vrt'))
+        ds = None
+        assert '<SourceFilename relativeToVRT="1">byte.tif<' in open('tmp/byte.vrt', 'rt').read()
+    finally:
+        gdal.Unlink('tmp/byte.tif')
+        gdal.Unlink('tmp/byte.vrt')
+
+
+###############################################################################
+# Test the relativeToVRT attribute of SourceFilename
+
+def test_vrtmisc_sourcefilename_source_relative_dest_absolute():
+
+    shutil.copy('data/byte.tif', 'tmp')
+
+    try:
+        src_ds = gdal.Open(os.path.join('tmp', 'byte.tif'))
+        ds = gdal.GetDriverByName('VRT').CreateCopy('', src_ds)
+        path = os.path.join(os.getcwd(), 'tmp', 'byte.vrt')
+        if sys.platform == 'win32':
+           path = path.replace('/', '\\')
+        ds.SetDescription(path)
+        ds = None
+        assert '<SourceFilename relativeToVRT="1">byte.tif<' in open('tmp/byte.vrt', 'rt').read()
+    finally:
+        gdal.Unlink('tmp/byte.tif')
+        gdal.Unlink('tmp/byte.vrt')
+
+
+###############################################################################
+# Test the relativeToVRT attribute of SourceFilename
+
+def test_vrtmisc_sourcefilename_source_absolute_dest_absolute():
+
+    shutil.copy('data/byte.tif', 'tmp')
+
+    try:
+        src_ds = gdal.Open(os.path.join(os.getcwd(), 'tmp', 'byte.tif'))
+        ds = gdal.GetDriverByName('VRT').CreateCopy('', src_ds)
+        ds.SetDescription(os.path.join(os.getcwd(), 'tmp', 'byte.vrt'))
+        ds = None
+        assert '<SourceFilename relativeToVRT="1">byte.tif<' in open('tmp/byte.vrt', 'rt').read()
+    finally:
+        gdal.Unlink('tmp/byte.tif')
+        gdal.Unlink('tmp/byte.vrt')
+
+
+###############################################################################
+# Test the relativeToVRT attribute of SourceFilename
+
+def test_vrtmisc_sourcefilename_source_absolute_dest_relative():
+
+    shutil.copy('data/byte.tif', 'tmp')
+
+    try:
+        path = os.path.join(os.getcwd(), 'tmp', 'byte.tif')
+        if sys.platform == 'win32':
+           path = path.replace('/', '\\')
+        src_ds = gdal.Open(path)
+        ds = gdal.GetDriverByName('VRT').CreateCopy('', src_ds)
+        ds.SetDescription(os.path.join('tmp', 'byte.vrt'))
+        ds = None
+        assert '<SourceFilename relativeToVRT="1">byte.tif<' in open('tmp/byte.vrt', 'rt').read()
+    finally:
+        gdal.Unlink('tmp/byte.tif')
+        gdal.Unlink('tmp/byte.vrt')

@@ -34,16 +34,23 @@ for f in $MODIFIED; do
     *CMakeLists.txt)
       ;;
 
-  *)
-    continue
-    ;;
+    *gdal.cmake)
+      ;;
+
+    *cmake/helpers/CheckDependentLibraries.cmake)
+      ;;
+
+    *)
+      continue
+      ;;
   esac
 
-  m=$f.prepare
-  cp "$f" "$m"
-  cmake-format -i "$f"
-  diff -u "$m" "$f" >> "$FORMAT_FIX_DIFF" || /bin/true
-  rm -f "$m"
+  # Disable cmake-format (https://github.com/OSGeo/gdal/pull/5326#issuecomment-1042617407)
+  # m=$f.prepare
+  # cp "$f" "$m"
+  # cmake-format -i "$f"
+  # diff -u "$m" "$f" >> "$FORMAT_FIX_DIFF" || /bin/true
+  # rm -f "$m"
 done
 
 ret_code=0

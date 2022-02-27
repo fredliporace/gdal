@@ -108,6 +108,8 @@ class FGdbLayer final: public FGdbBaseLayer
 {
   friend class FGdbDataSource;
 
+  bool                m_bWorkaroundCrashOnCDFWithBinaryField = false;
+
   int                 m_bBulkLoadAllowed;
   int                 m_bBulkLoadInProgress;
 
@@ -314,6 +316,7 @@ public:
   int TestCapability( const char * ) override;
 
   const OGRFieldDomain* GetFieldDomain(const std::string& name) const override;
+  std::vector<std::string> GetFieldDomainNames(CSLConstList papszOptions = nullptr) const override;
 
   std::shared_ptr<GDALGroup> GetRootGroup() const override { return m_poRootGroup; }
 

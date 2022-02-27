@@ -89,6 +89,20 @@ This problem can manifest itself in subtle ways. For example, it can occur if yo
 
 In this example, the dataset instance was no longer needed after the call to ``GetRasterBand()`` so Python deallocated it *before* calling ``Checksum()``.
 
+.. code-block::
+
+   >>> from osgeo import gdal
+   >>>
+   >>> def load_band(data_filename):
+   >>>     dataset = gdal.Open(data_filename)
+   >>>     return dataset.GetRasterBand(1)
+   >>>
+   >>> band = load_band('c:\\RandomData.img')
+   >>> print(band.Checksum())
+   < Python crashes >
+   
+this example is the same case with above but it looks different. the dataset object is only available in the ``load_band`` function and it'll be deleted right after leaving the function.
+
 This problem occurs because the GDAL and OGR objects are implemented in C++ and the relationships between them are maintained in C++ using pointers. 
 When you delete the dataset instance in Python it causes the C++ object behind it to be deallocated. But the C++ object behind the band instance does not know that this happened, so it contains a pointer to the C++ dataset object that no longer exists.
 When the band tries to access the non-existing object, the process crashes.
@@ -229,17 +243,18 @@ So if you want to  `catch warnings as well as errors <https://gis.stackexchange.
 
 .. code-block::
 
-   def error_handler(err_level, err_no, err_msg):
+    from osgeo import gdal
 
-      if err_level >= gdal.CE_Warning:
-         raise RuntimeError(err_level, err_no, err_msg) #this exception does not propagate back to main thread!
+    def error_handler(err_level, err_no, err_msg):
+        if err_level >= gdal.CE_Warning:
+            raise RuntimeError(err_level, err_no, err_msg)  # this exception does not propagate back to main thread!
 
-   if __name__=='__main__':
+    if __name__ == '__main__':
+        # Test custom error handler
+        gdal.PushErrorHandler(error_handler)
+        gdal.Error(gdal.CE_Warning, 2, 'test warning message')
+        gdal.PopErrorHandler()
 
-      #Test custom error handler
-      gdal.PushErrorHandler(error_handler)
-      gdal.Error(gdal.CE_Warning,2,'test warning message')
-      gdal.PopErrorHandler()
 
 
 But you can do something like this instead:
@@ -247,38 +262,53 @@ But you can do something like this instead:
 
 .. code-block::
 
-   class GdalErrorHandler(object):
-      def __init__(self):
-         self.err_level=gdal.CE_None
-         self.err_no=0
-         self.err_msg=``
+    from osgeo import gdal
 
-      def handler(self, err_level, err_no, err_msg):
-         self.err_level=err_level
-         self.err_no=err_no
-         self.err_msg=err_msg
+    class GdalErrorHandler(object):
+        def __init__(self):
+            self.err_level = gdal.CE_None
+            self.err_no = 0
+            self.err_msg = ''
 
-   if __name__=='__main__':
+        def handler(self, err_level, err_no, err_msg):
+            self.err_level = err_level
+            self.err_no = err_no
+            self.err_msg = err_msg
 
-      err=GdalErrorHandler()
-      handler=err.handler # Note don't pass class method directly or python segfaults
-                          # due to a reference counting bug 
-                          # http://trac.osgeo.org/gdal/ticket/5186#comment:4
+    if __name__ == '__main__':
+        err = GdalErrorHandler()
+        gdal.PushErrorHandler(err.handler)
+        gdal.UseExceptions()  # Exceptions will get raised on anything >= gdal.CE_Failure
 
-      gdal.PushErrorHandler(handler)
-      gdal.UseExceptions() #Exceptions will get raised on anything >= gdal.CE_Failure
+        assert err.err_level == gdal.CE_None, 'the error level starts at 0'
 
-      try:
-         gdal.Error(gdal.CE_Warning,1,'Test warning message')
-      except Exception as e:
-         print('Operation raised an exception')
-         raise e
-   else:
-      if err.err_level >= gdal.CE_Warning:
-         print('Operation raised an warning')
-            raise RuntimeError(err.err_level, err.err_no, err.err_msg)
-   finally:
-      gdal.PopErrorHandler()
+        try:
+            # Demonstrate handling of a warning message
+            try:
+                gdal.Error(gdal.CE_Warning, 8675309, 'Test warning message')
+            except Exception:
+                raise AssertionError('Operation raised an exception, this should not happen')
+            else:
+                assert err.err_level == gdal.CE_Warning, (
+                    'The handler error level should now be at warning')
+                print('Handled error: level={}, no={}, msg={}'.format(
+                    err.err_level, err.err_no, err.err_msg))
+
+            # Demonstrate handling of an error message
+            try:
+                gdal.Error(gdal.CE_Failure, 42, 'Test error message')
+            except Exception as e:
+                assert err.err_level == gdal.CE_Failure, (
+                    'The handler error level should now be at failure')
+                assert err.err_msg == e.args[0], 'raised exception should contain the message'
+                print('Handled warning: level={}, no={}, msg={}'.format(
+                    err.err_level, err.err_no, err.err_msg))
+            else:
+                raise AssertionError('Error message was not raised, this should not happen')
+
+        finally:
+            gdal.PopErrorHandler()
+
 
 
 Gotchas that result from bugs or behaviors of other software

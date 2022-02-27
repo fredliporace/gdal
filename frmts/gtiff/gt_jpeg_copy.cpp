@@ -27,6 +27,7 @@
  ****************************************************************************/
 
 #include "cpl_port.h"
+
 #include "gt_jpeg_copy.h"
 
 #include "cpl_vsi.h"

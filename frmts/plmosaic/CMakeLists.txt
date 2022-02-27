@@ -1,10 +1,9 @@
-add_gdal_driver(TARGET gdal_PLMOSAIC SOURCES plmosaicdataset.cpp PLUGIN_CAPABLE_IF "NOT GDAL_USE_LIBJSONC_INTERNAL"
+add_gdal_driver(TARGET gdal_PLMOSAIC SOURCES plmosaicdataset.cpp PLUGIN_CAPABLE_IF "NOT GDAL_USE_JSONC_INTERNAL"
                                              NO_DEPS)
 gdal_standard_includes(gdal_PLMOSAIC)
 target_include_directories(gdal_PLMOSAIC PRIVATE ${GDAL_VECTOR_FORMAT_SOURCE_DIR}/geojson)
-if (GDAL_USE_LIBJSONC_INTERNAL)
-  target_include_directories(gdal_PLMOSAIC PRIVATE $<TARGET_PROPERTY:libjson,SOURCE_DIR>)
+if (GDAL_USE_JSONC_INTERNAL)
+  gdal_add_vendored_lib(gdal_PLMOSAIC libjson)
 else ()
-  target_include_directories(gdal_PLMOSAIC PRIVATE ${JSONC_INCLUDE_DIR})
-  gdal_target_link_libraries(TARGET gdal_PLMOSAIC LIBRARIES ${JSONC_LIBRARY})
+  gdal_target_link_libraries(gdal_PLMOSAIC PRIVATE ${JSONC_LIBRARIES})
 endif ()

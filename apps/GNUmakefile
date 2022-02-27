@@ -34,15 +34,15 @@ CPPFLAGS +=	-iquote $(GDAL_ROOT)/gnm
 endif
 
 ifeq ($(HAVE_GEOS),yes)
-CPPFLAGS 	:=	$(CPPFLAGS) -DHAVE_GEOS=1 $(GEOS_CFLAGS)
+CPPFLAGS 	:=	$(CPPFLAGS) -DHAVE_GEOS=1
 endif
 
 NON_DEFAULT_LIST = 	multireadtest$(EXE) dumpoverviews$(EXE) \
 	gdalwarpsimple$(EXE) gdalflattenmask$(EXE) \
-	gdaltorture$(EXE) gdal2ogr$(EXE) test_ogrsf$(EXE) \
+	gdaltorture$(EXE) gdal2ogr$(EXE) \
 	gdalasyncread$(EXE) testreprojmulti$(EXE)
 
-default:	gdal-config-inst gdal-config $(BIN_LIST)
+default:	gdal-config-inst gdal-config $(BIN_LIST) test_ogrsf$(EXE)
 
 all: default $(NON_DEFAULT_LIST)
 
@@ -166,9 +166,6 @@ ogrlineref$(EXE):	ogrlineref.$(OBJ_EXT)  $(DEP_LIBS)
 ogr2ogr$(EXE):	ogr2ogr_bin.$(OBJ_EXT)  $(DEP_LIBS)
 	$(LD) $(LNK_FLAGS) $< $(XTRAOBJ) $(CONFIG_LIBS) -o $@
 
-testepsg$(EXE):	testepsg.$(OBJ_EXT) $(DEP_LIBS)
-	$(LD) $(LNK_FLAGS) $< $(XTRAOBJ) $(CONFIG_LIBS) -o $@
-
 ogrtindex$(EXE):	ogrtindex.$(OBJ_EXT) $(DEP_LIBS)
 	$(LD) $(LNK_FLAGS) $< $(XTRAOBJ) $(CONFIG_LIBS) -o $@
 
@@ -205,7 +202,7 @@ gdal-config:	gdal-config.in ../GDALmake.opt ./GNUmakefile ../VERSION
 	echo 'CONFIG_LIBS="$(CONFIG_LIBS)"' >> gdal-config
 	echo 'CONFIG_DEP_LIBS="$(LIBS)"' >> gdal-config
 	echo 'CONFIG_PREFIX="$(GDAL_ROOT)"' >> gdal-config
-	echo 'CONFIG_CFLAGS="-I$(GDAL_ROOT)/port -I$(GDAL_ROOT)/gcore -I$(GDAL_ROOT)/alg -I$(GDAL_ROOT)/gnm -I$(GDAL_ROOT)/ogr -I$(GDAL_ROOT)/ogr/ogrsf_frmts -I$(GDAL_ROOT)/frmts/vrt -I$(GDAL_ROOT)/apps"' >> gdal-config
+	echo 'CONFIG_CFLAGS="-I$(GDAL_ROOT)/port -I$(GDAL_ROOT)/generated_headers -I$(GDAL_ROOT)/gcore -I$(GDAL_ROOT)/alg -I$(GDAL_ROOT)/gnm -I$(GDAL_ROOT)/ogr -I$(GDAL_ROOT)/ogr/ogrsf_frmts -I$(GDAL_ROOT)/frmts/vrt -I$(GDAL_ROOT)/apps"' >> gdal-config
 	echo 'CONFIG_DATA="$(GDAL_ROOT)/data"' >> gdal-config
 	echo 'CONFIG_VERSION="'`cat ../VERSION`'"' >> gdal-config
 	echo 'CONFIG_OGR_ENABLED=yes' >> gdal-config  # Deprecated.  Always true.

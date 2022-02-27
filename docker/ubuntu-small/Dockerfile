@@ -3,7 +3,7 @@
 
 # This file is available at the option of the licensee under:
 # Public domain
-# or licensed under X/MIT (LICENSE.TXT) Copyright 2019 Even Rouault <even.rouault@spatialys.com>
+# or licensed under MIT (LICENSE.TXT) Copyright 2019 Even Rouault <even.rouault@spatialys.com>
 
 ARG PROJ_INSTALL_PREFIX=/usr/local
 ARG BASE_IMAGE=ubuntu:20.04
@@ -95,7 +95,7 @@ RUN . /buildscripts/bh-set-envvars.sh \
     && wget -q https://github.com/OSGeo/PROJ/archive/${PROJ_VERSION}.tar.gz -O - \
         | tar xz -C proj --strip-components=1 \
     && cd proj \
-    && if test "${RSYNC_REMOTE}" != ""; then \
+    && if test "${RSYNC_REMOTE:-}" != ""; then \
         echo "Downloading cache..."; \
         rsync -ra ${RSYNC_REMOTE}/proj/${GCC_ARCH}/ $HOME/; \
         echo "Finished"; \
@@ -112,7 +112,7 @@ RUN . /buildscripts/bh-set-envvars.sh \
         -DBUILD_TESTING=OFF \
     && make -j$(nproc) \
     && make install DESTDIR="/build" \
-    && if test "${RSYNC_REMOTE}" != ""; then \
+    && if test "${RSYNC_REMOTE:-}" != ""; then \
         ccache -s; \
         echo "Uploading cache..."; \
         rsync -ra --delete $HOME/.ccache ${RSYNC_REMOTE}/proj/${GCC_ARCH}/; \
@@ -152,7 +152,7 @@ RUN . /buildscripts/bh-set-envvars.sh \
         | tar xz -C gdal --strip-components=1 \
     && cd gdal \
     && ./autogen.sh \
-    && if test "${RSYNC_REMOTE}" != ""; then \
+    && if test "${RSYNC_REMOTE:-}" != ""; then \
         echo "Downloading cache..."; \
         rsync -ra ${RSYNC_REMOTE}/gdal/${GCC_ARCH}/ $HOME/; \
         echo "Finished"; \
@@ -175,7 +175,7 @@ RUN . /buildscripts/bh-set-envvars.sh \
     --with-geotiff=internal --with-rename-internal-libgeotiff-symbols \
     && make -j$(nproc) \
     && make install DESTDIR="/build" \
-    && if test "${RSYNC_REMOTE}" != ""; then \
+    && if test "${RSYNC_REMOTE:-}" != ""; then \
         ccache -s; \
         echo "Uploading cache..."; \
         rsync -ra --delete $HOME/.ccache ${RSYNC_REMOTE}/gdal/${GCC_ARCH}/; \

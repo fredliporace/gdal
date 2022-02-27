@@ -1,20 +1,30 @@
-# CMake4GDAL project is distributed under X/MIT license. See accompanying file LICENSE.txt.
+# CMake4GDAL project is distributed under MIT license. See accompanying file LICENSE.txt.
 
+#[[
 option(AUTOTEST_DOWNLOAD_TEST_DATA "Autotest to download test data" OFF)
 option(AUTOTEST_SLOW_TEST "Autotest to run slow test" OFF)
 if (NOT DEFINED ENV{CTEST_PARALLEL_LEVEL})
   set(PARALLEL_OPTION "-j1")
 endif ()
+]]
 
-if (Python_FOUND)
+if (Python_Interpreter_FOUND)
+
+  include(GdalSetRuntimeEnv)
+  gdal_set_runtime_env(PYTHON_RUN_ENV)
+
   if (WIN32)
-    set(_SEP ";")
-  else ()
-    set(_SEP ":")
+    # If running GDAL as a CustomBuild Command os MSBuild, "ERROR bla:" is considered as failing the job. This is rarely
+    # the intended behavior
+    list(APPEND PYTHON_RUN_ENV "CPL_ERROR_SEPARATOR=\\;")
   endif ()
-  get_target_property(PLUGIN_OUTPUT_DIR ${GDAL_LIB_TARGET_NAME} PLUGIN_OUTPUT_DIR)
-  list(APPEND _TEST_ENV "PATH=${CMAKE_BINARY_DIR}/apps${_SEP}$ENV{PATH}" "GDAL_DATA=${CMAKE_SOURCE_DIR}/data"
-       "GDAL_DRIVER_PATH=${PLUGIN_OUTPUT_DIR}")
+
+  # Set TEST_ENV that goes into pytest.ini
+
+  # Set GDAL_DATA
+  file(TO_NATIVE_PATH "${PROJECT_SOURCE_DIR}/data" GDAL_DATA)
+  set(_TEST_ENV GDAL_DATA=${GDAL_DATA})
+
   if (GDAL_DOWNLOAD_TEST_DATA)
     list(APPEND _TEST_ENV GDAL_DOWNLOAD_TEST_DATA=YES)
   else ()
@@ -25,13 +35,45 @@ if (Python_FOUND)
   else ()
     list(APPEND _TEST_ENV GDAL_RUN_SLOW_TESTS=NO)
   endif ()
-  string(REPLACE ";" "\n  " TEST_ENV "${_TEST_ENV}")
+  # Conda enable PROJ_NETWORK but this does interfere with some of our tests due to some unexpected grid being used
+  list(APPEND _TEST_ENV PROJ_NETWORK=OFF)
+
+  string(REPLACE ";" "\n   " TEST_ENV "${_TEST_ENV}")
+
   set(AUTOTEST_LOG_FILE "${CMAKE_CURRENT_BINARY_DIR}/autotest.log")
   configure_file(${GDAL_CMAKE_TEMPLATE_PATH}/pytest.ini.in ${CMAKE_CURRENT_BINARY_DIR}/pytest.ini @ONLY)
   file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/conftest.py DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 
-  set(PYTHON_RUN_ENV "PYTHONPATH=${CMAKE_BINARY_DIR}/swig/python/"
-                     "LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}${_SEP}$ENV{LD_LIBRARY_PATH}")
+  function (symlink_or_copy source destination)
+
+    if (CMAKE_VERSION VERSION_GREATER 3.14)
+      file(
+        CREATE_LINK ${source} ${destination}
+        RESULT res
+        SYMBOLIC)
+      if (NOT res EQUAL 0)
+        message(STATUS "Copying content of ${source} to ${destination}")
+        execute_process(COMMAND ${CMAKE_COMMAND} -E copy_directory ${source} ${destination})
+      endif ()
+    else ()
+      if (NOT CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
+        execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink ${source} ${destination})
+      else ()
+        message(STATUS "Copying content of ${source} to ${destination}")
+        execute_process(COMMAND ${CMAKE_COMMAND} -E copy_directory ${source} ${destination})
+      endif ()
+    endif ()
+
+  endfunction ()
+
+  # Needed for a autotest/osr test
+  symlink_or_copy(${CMAKE_CURRENT_SOURCE_DIR}/cpp/data ${CMAKE_CURRENT_BINARY_DIR}/cpp/data)
+  if (SKIP_COPYING_AUTOTEST_SUBDIRS)
+    message(STATUS "Skipping copying ${CMAKE_CURRENT_SOURCE_DIR}/pymod")
+  else ()
+    symlink_or_copy(${CMAKE_CURRENT_SOURCE_DIR}/pymod ${CMAKE_CURRENT_BINARY_DIR}/pymod)
+  endif ()
+
   foreach (
     tgt IN
     ITEMS ogr
@@ -40,43 +82,35 @@ if (Python_FOUND)
           alg
           osr
           gnm
-          pymod
           pyscripts
           utilities)
-    if (CMAKE_VERSION VERSION_GREATER 3.14)
-      file(
-        CREATE_LINK ${CMAKE_CURRENT_SOURCE_DIR}/${tgt} ${CMAKE_CURRENT_BINARY_DIR}/${tgt}
-        RESULT res
-        SYMBOLIC)
-      if (NOT res EQUAL 0)
-        message("Copying content of ${CMAKE_CURRENT_SOURCE_DIR}/${tgt} to ${CMAKE_CURRENT_BINARY_DIR}/${tgt}")
-        execute_process(COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/${tgt}
-                                ${CMAKE_CURRENT_BINARY_DIR}/${tgt})
-      endif ()
+    if (SKIP_COPYING_AUTOTEST_SUBDIRS)
+      message(STATUS "Skipping copying ${CMAKE_CURRENT_SOURCE_DIR}/${tgt}")
     else ()
-      if (NOT CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
-        execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink ${CMAKE_CURRENT_SOURCE_DIR}/${tgt}
-                                ${CMAKE_CURRENT_BINARY_DIR}/${tgt})
-      else ()
-        message("Copying content of ${CMAKE_CURRENT_SOURCE_DIR}/${tgt} to ${CMAKE_CURRENT_BINARY_DIR}/${tgt}")
-        execute_process(COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/${tgt}
-                                ${CMAKE_CURRENT_BINARY_DIR}/${tgt})
-      endif ()
+      symlink_or_copy(${CMAKE_CURRENT_SOURCE_DIR}/${tgt} ${CMAKE_CURRENT_BINARY_DIR}/${tgt})
     endif ()
     add_custom_target(
       autotest_${tgt}
       COMMAND ${CMAKE_COMMAND} -E env ${PYTHON_RUN_ENV} ${Python_EXECUTABLE} -m pytest -c
               ${CMAKE_CURRENT_BINARY_DIR}/pytest.ini ${tgt}
       DEPENDS ${GDAL_LIB_TARGET_NAME} gdalapps python_binding)
+    add_test(NAME autotest_${tgt} COMMAND ${Python_EXECUTABLE} -m pytest -c ${CMAKE_CURRENT_BINARY_DIR}/pytest.ini
+                                          ${tgt})
+    set_property(TEST autotest_${tgt} PROPERTY ENVIRONMENT "${PYTHON_RUN_ENV}")
   endforeach ()
   add_custom_target(
     autotest
     COMMAND ${CMAKE_COMMAND} -E env ${PYTHON_RUN_ENV} ${Python_EXECUTABLE} -m pytest -c
             ${CMAKE_CURRENT_BINARY_DIR}/pytest.ini
     DEPENDS ${GDAL_LIB_TARGET_NAME} gdalapps python_binding)
-  file(
-    WRITE ${CMAKE_CURRENT_BINARY_DIR}/pytest_runner.cpp
-    "
+
+  # Generating Python bindings in Debug mode of MSVC tends to be problematic, since it requires a python debug library
+  # not easily found, hence we disable pytest_runner for that situation We might not need it at all
+  get_property(_isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+  if (Python_Development_FOUND AND NOT (_isMultiConfig AND WIN32))
+    file(
+      WRITE ${CMAKE_CURRENT_BINARY_DIR}/pytest_runner.cpp
+      "
 #include <string>
 #include <Python.h>
 int main(int argc, char **argv) {
@@ -100,15 +134,15 @@ int main(int argc, char **argv) {
     Py_Finalize();
     return 0;
 }")
-  add_executable(pytest_runner ${CMAKE_CURRENT_BINARY_DIR}/pytest_runner.cpp)
-  set_property(TARGET pytest_runner PROPERTY CXX_STANDARD 11)
-  target_link_libraries(pytest_runner PUBLIC ${GDAL_LIB_TARGET_NAME})
-  target_include_directories(pytest_runner PRIVATE ${Python_INCLUDE_DIRS})
-  target_link_libraries(pytest_runner PRIVATE ${Python_LIBRARIES})
-  add_custom_target(
-    autotest_runner
-    COMMAND ${CMAKE_COMMAND} -E env ${PYTHON_RUN_ENV} $<TARGET_NAME:pytest_runner> -c
-            ${CMAKE_CURRENT_BINARY_DIR}/pytest.ini
-    DEPENDS ${GDAL_LIB_TARGET_NAME} gdalapps python_binding pytest_runner
-    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    add_executable(pytest_runner ${CMAKE_CURRENT_BINARY_DIR}/pytest_runner.cpp)
+    set_property(TARGET pytest_runner PROPERTY CXX_STANDARD 11)
+    target_include_directories(pytest_runner PRIVATE ${Python_INCLUDE_DIRS})
+    target_link_libraries(pytest_runner PRIVATE ${Python_LIBRARIES})
+    add_custom_target(
+      autotest_runner
+      COMMAND ${CMAKE_COMMAND} -E env ${PYTHON_RUN_ENV} $<TARGET_NAME:pytest_runner> -c
+              ${CMAKE_CURRENT_BINARY_DIR}/pytest.ini
+      DEPENDS ${GDAL_LIB_TARGET_NAME} gdalapps python_binding pytest_runner
+      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+  endif ()
 endif ()

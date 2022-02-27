@@ -9,7 +9,7 @@ License
 License
 --------------------------------------------------------------------------------
 
-In general GDAL/OGR is licensed under an MIT/X style license with the 
+In general GDAL/OGR is licensed under an MIT style license with the 
 following terms:
 
 Permission is hereby granted, free of charge, to any person obtaining a
@@ -32,4 +32,4 @@ DEALINGS IN THE SOFTWARE.
 
 The full licensing terms are available in the `LICENSE.TXT`_ file.
 
-.. _`LICENSE.TXT`: https://raw.githubusercontent.com/OSGeo/gdal/master/gdal/LICENSE.TXT
+.. _`LICENSE.TXT`: https://raw.githubusercontent.com/OSGeo/gdal/master/LICENSE.TXT

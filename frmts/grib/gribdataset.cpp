@@ -981,7 +981,7 @@ CPLErr GRIBRasterBand::IReadBlock( int /* nBlockXOff */,
            (nCopyWords - nSplitAndSwapColumn) * sizeof(double));
 
     if (nSplitAndSwapColumn > 0)
-        memcpy(reinterpret_cast<void*>(reinterpret_cast<double*>(pImage) + nSplitAndSwapColumn),
+        memcpy(reinterpret_cast<void*>(reinterpret_cast<double*>(pImage) + nCopyWords - nSplitAndSwapColumn),
             m_Grib_Data + static_cast<size_t>(nGribDataXSize) * (nGribDataYSize - nBlockYOff - 1),
             nSplitAndSwapColumn * sizeof(double));
 
@@ -2235,27 +2235,11 @@ GDALDataset *GRIBDataset::OpenMultiDim( GDALOpenInfo *poOpenInfo )
         }
         psInv->start += nOffsetFirstMessage;
 
-        bool bNewArray = false;
-        if( osElement.empty() )
-        {
-            bNewArray = true;
-        }
-        else
-        {
-            if( osElement != psInv->element ||
-                osShortFstLevel != psInv->shortFstLevel ||
-                !((dfRefTime == psInv->refTime && dfForecastTime != psInv->foreSec) ||
-                  (dfRefTime != psInv->refTime && dfForecastTime == psInv->foreSec)) )
-            {
-                bNewArray = true;
-            }
-            else
-            {
-                poArray->ExtendTimeDim(psInv->start, psInv->subgNum, psInv->validTime);
-            }
-        }
-
-        if (bNewArray)
+        if( poArray == nullptr ||
+            osElement != psInv->element ||
+            osShortFstLevel != psInv->shortFstLevel ||
+            !((dfRefTime == psInv->refTime && dfForecastTime != psInv->foreSec) ||
+              (dfRefTime != psInv->refTime && dfForecastTime == psInv->foreSec)) )
         {
             if( poArray)
             {
@@ -2292,6 +2276,7 @@ GDALDataset *GRIBDataset::OpenMultiDim( GDALOpenInfo *poOpenInfo )
             // the first GRIB band.
             poDS->SetGribMetaData(metaData);
 
+            // coverity[tainted_data]
             GRIBRasterBand gribBand(poDS, bandNr, psInv);
             if( psInv->GribVersion == 2 )
                 gribBand.FindPDSTemplate();
@@ -2315,6 +2300,10 @@ GDALDataset *GRIBDataset::OpenMultiDim( GDALOpenInfo *poOpenInfo )
 
             MetaFree(metaData);
             delete metaData;
+        }
+        else
+        {
+            poArray->ExtendTimeDim(psInv->start, psInv->subgNum, psInv->validTime);
         }
     }
 
@@ -2378,7 +2367,7 @@ void GRIBDataset::SetGribMetaData(grib_MetaData *meta)
         break;
     case GS3_TRANSVERSE_MERCATOR:
         oSRS.SetTM(meta->gds.latitude_of_origin,
-                   meta->gds.central_meridian,
+                   Lon360to180(meta->gds.central_meridian),
                    std::abs(meta->gds.scaleLat1 - 0.9996) < 1e8 ?
                         0.9996 : meta->gds.scaleLat1,
                    meta->gds.x0,
@@ -2390,11 +2379,11 @@ void GRIBDataset::SetGribMetaData(grib_MetaData *meta)
         break;
     case GS3_LAMBERT:
         oSRS.SetLCC(meta->gds.scaleLat1, meta->gds.scaleLat2, meta->gds.meshLat,
-                    meta->gds.orientLon, 0.0, 0.0);
+                    Lon360to180(meta->gds.orientLon), 0.0, 0.0);
         break;
     case GS3_ALBERS_EQUAL_AREA:
         oSRS.SetACEA(meta->gds.scaleLat1, meta->gds.scaleLat2, meta->gds.meshLat,
-                    meta->gds.orientLon, 0.0, 0.0);
+                     Lon360to180(meta->gds.orientLon), 0.0, 0.0);
         break;
 
     case GS3_ORTHOGRAPHIC:
@@ -2409,7 +2398,9 @@ void GRIBDataset::SetGribMetaData(grib_MetaData *meta)
         oSRS.SetGEOS(0, 35785831, 0, 0);
         break;
     case GS3_LAMBERT_AZIMUTHAL:
-        oSRS.SetLAEA(meta->gds.meshLat, meta->gds.orientLon, 0.0, 0.0);
+        oSRS.SetLAEA(meta->gds.meshLat,
+                     Lon360to180(meta->gds.orientLon),
+                     0.0, 0.0);
         break;
 
     case GS3_EQUATOR_EQUIDIST:
@@ -2467,8 +2458,7 @@ void GRIBDataset::SetGribMetaData(grib_MetaData *meta)
         oSRS.SetDerivedGeogCRSWithPoleRotationGRIBConvention(
             oSRS.GetName(),
             meta->gds.southLat,
-            meta->gds.southLon > 180 ?
-                meta->gds.southLon - 360 : meta->gds.southLon,
+            Lon360to180(meta->gds.southLon),
             meta->gds.angleRotate);
     }
 
@@ -2594,13 +2584,18 @@ void GRIBDataset::SetGribMetaData(grib_MetaData *meta)
                 CPLDebug("GRIB",
                     "Cannot properly handle GRIB2 files with overlaps and 0-360 longitudes");
             else if (fabs(360 - rPixelSizeX * nRasterXSize) < rPixelSizeX/4 &&
-                meta->gds.projType == GS3_LATLON)
+                     rMinX <= 180 &&
+                     meta->gds.projType == GS3_LATLON)
             {
                 // Find the first row number east of the antimeridian
-                nSplitAndSwapColumn = static_cast<int>(ceil((180 - rMinX) / rPixelSizeX));
-                CPLDebug("GRIB", "Rewrapping around the antimeridian at column %d",
-                    nSplitAndSwapColumn);
-                rMinX = -180;
+                const int nSplitAndSwapColumnCandidate = static_cast<int>(ceil((180 - rMinX) / rPixelSizeX));
+                if( nSplitAndSwapColumnCandidate < nRasterXSize )
+                {
+                    nSplitAndSwapColumn = nSplitAndSwapColumnCandidate;
+                    CPLDebug("GRIB", "Rewrapping around the antimeridian at column %d",
+                        nSplitAndSwapColumn);
+                    rMinX = -180;
+                }
             }
             else if (Lon360to180(rMinX) > Lon360to180(rMaxX))
             {

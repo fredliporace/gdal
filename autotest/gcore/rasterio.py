@@ -616,7 +616,7 @@ def test_rasterio_9():
                                           callback_data=tab)
     assert data is not None
     cs = rasterio_9_checksum(data, 162 * 16, 150 * 16)
-    assert cs == 30836
+    assert cs == 18981
     assert tab[0] == pytest.approx(1.0, abs=1e-5)
 
 ###############################################################################
@@ -723,8 +723,8 @@ def test_rasterio_13():
 
         ar_ds = mem_ds.ReadAsArray(0, 0, 4, 3, buf_xsize=8, buf_ysize=3, resample_alg=gdal.GRIORA_Cubic)
 
-        expected_ar = numpy.array([[0, 0, 0, 0, 0, 0, 0, 0], [0, 255, 255, 255, 255, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0]])
-        assert numpy.array_equal(ar_ds, expected_ar), dt
+        expected_ar = numpy.array([[0, 0, 0, 0, 0, 0, 0, 0], [0, 255, 255, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0]])
+        assert numpy.array_equal(ar_ds, expected_ar), (ar_ds, dt)
 
 
 ###############################################################################
@@ -1010,7 +1010,7 @@ def test_rasterio_dataset_invalid_resample_alg(resample_alg):
 def test_rasterio_floating_point_window_no_resampling():
     """ Test fix for #3101 """
 
-    ds = gdal.Translate('/vsimem/test.tif', gdal.Open('data/rgbsmall.tif'))
+    ds = gdal.Translate('/vsimem/test.tif', gdal.Open('data/rgbsmall.tif'), options = '-co INTERLEAVE=PIXEL')
     assert ds.GetMetadataItem('INTERLEAVE', 'IMAGE_STRUCTURE') == 'PIXEL'
 
     # Check that GDALDataset::IRasterIO() in block-based strategy behaves the
@@ -1027,7 +1027,7 @@ def test_rasterio_floating_point_window_no_resampling_numpy():
     # Same as above but using ReadAsArray() instead of ReadRaster()
     numpy = pytest.importorskip('numpy')
 
-    ds = gdal.Translate('/vsimem/test.tif', gdal.Open('data/rgbsmall.tif'))
+    ds = gdal.Translate('/vsimem/test.tif', gdal.Open('data/rgbsmall.tif'), options = '-co INTERLEAVE=PIXEL')
     assert ds.GetMetadataItem('INTERLEAVE', 'IMAGE_STRUCTURE') == 'PIXEL'
 
     data_per_band = numpy.stack([ds.GetRasterBand(i+1).ReadAsArray(0.1,0.2,10.4,11.4,buf_xsize=10,buf_ysize=11) for i in range(3)])

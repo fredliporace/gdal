@@ -151,7 +151,7 @@ The :file:`PaletteInterp` enumeration can be used to distinguish between the var
 
     Band band = dataset.GetRasterBand(1);
     ColorTable ct = band.GetRasterColorTable();
-    if (ct.GetPaletteInterpretation() != PaletteInterp.GPI_RGB)
+    if (ct.GetPaletteInterpretation() == PaletteInterp.GPI_RGB)
     {
         Console.WriteLine("   This raster band has RGB palette interpretation!");
     }
@@ -221,8 +221,8 @@ Related C# examples
 
 The following examples demonstrate the usage of the GDAL raster operations mentioned previously:
 
-* `GDALRead.cs <https://github.com/OSGeo/gdal/blob/master/gdal/swig/csharp/apps/GDALRead.cs>`__
-* `GDALReadDirect.cs <https://github.com/OSGeo/gdal/blob/master/gdal/swig/csharp/apps/GDALReadDirect.cs>`__
-* `GDALWrite.cs <https://github.com/OSGeo/gdal/blob/master/gdal/swig/csharp/apps/GDALReadDirect.cs>`__
+* `GDALRead.cs <https://github.com/OSGeo/gdal/blob/master/swig/csharp/apps/GDALRead.cs>`__
+* `GDALReadDirect.cs <https://github.com/OSGeo/gdal/blob/master/swig/csharp/apps/GDALReadDirect.cs>`__
+* `GDALWrite.cs <https://github.com/OSGeo/gdal/blob/master/swig/csharp/apps/GDALReadDirect.cs>`__
 
 .. note:: This document was amended from the previous version at `https://trac.osgeo.org/gdal/wiki/GdalOgrCsharpRaster <https://trac.osgeo.org/gdal/wiki/GdalOgrCsharpRaster>`__

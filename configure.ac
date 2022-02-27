@@ -36,7 +36,7 @@ AC_INIT
 AC_CONFIG_SRCDIR([GDALmake.opt.in])
 AC_SUBST(PACKAGE, gdal)
 AC_CONFIG_MACRO_DIR(m4)
-AC_CONFIG_HEADERS([port/cpl_config.h:port/cpl_config.h.in])
+AC_CONFIG_HEADERS([generated_headers/cpl_config.h:port/cpl_config.h.in])
 AH_TOP([#ifndef CPL_CONFIG_H])
 AH_TOP([#define CPL_CONFIG_H])
 AH_BOTTOM([#include "cpl_config_extras.h"])
@@ -294,7 +294,7 @@ case "${host_os}" in
 esac
 
 dnl Checks for header files.
-AC_CHECK_HEADERS(assert.h fcntl.h unistd.h dlfcn.h stdint.h limits.h locale.h values.h float.h errno.h direct.h)
+AC_CHECK_HEADERS(fcntl.h unistd.h dlfcn.h locale.h direct.h)
 
 dnl Check for userfaultfd support
 AC_CHECK_HEADERS([linux/userfaultfd.h], [ENABLE_UFFD="yes"], [ENABLE_UFFD="no"], [])
@@ -313,38 +313,15 @@ esac
 AC_C_BIGENDIAN
 
 dnl Check for 64 bit file API
-AC_CHECK_TYPES([long long])
 AC_UNIX_STDIO_64
 
 AC_CHECK_SIZEOF(int)
 AC_CHECK_SIZEOF(unsigned long)
 AC_CHECK_SIZEOF(void*)
-dnl Some compilers (IBM VisualAge) has these types defined, so check it here.
-dnl These types are used in internal libtiff.
-AC_CHECK_TYPES([int8, int16, int32],,,
-[
-#if HAVE_INTTYPES_H
-# include <inttypes.h>
-#endif
-])
-AC_CHECK_TYPES(uintptr_t)
-
-dnl We need the following lines for libtiff too.
-HAVE_IEEEFP=1
-AC_DEFINE_UNQUOTED(HAVE_IEEEFP, $HAVE_IEEEFP, [Define as 0 or 1 according to the floating point format supported by the machine])
 
 dnl Checks for library functions.
-AC_FUNC_VPRINTF
-AC_CHECK_FUNCS(snprintf vsnprintf)
-AC_CHECK_FUNCS(atoll)
-AC_CHECK_FUNCS(strtoll)
-AC_CHECK_FUNCS(strtoull)
-AC_CHECK_FUNCS(strtof)
+AC_CHECK_FUNCS(vsnprintf)
 AC_CHECK_FUNCS(getcwd)
-
-dnl Check for declarations
-AC_CHECK_DECLS(strtof)
-
 AC_CHECK_FUNCS(readlink)
 AC_CHECK_FUNCS(lstat)
 AC_CHECK_FUNCS(posix_spawnp)
@@ -378,6 +355,12 @@ AC_LANG_PUSH(C++)
 AC_CHECK_FUNC_CUSTOM(gmtime_r,[#include <time.h>],[time_t t; struct tm ltime; t = time(0); gmtime_r( &t, &ltime );])
 AC_CHECK_FUNC_CUSTOM(localtime_r,[#include <time.h>],[time_t t; struct tm ltime; t = time(0); localtime_r( &t, &ltime );])
 AC_LANG_POP(C++)
+
+AC_CHECK_HEADERS([xlocale.h],[GDAL_HAVE_XLOCALE_H=1])
+if test "$GDAL_HAVE_XLOCALE_H" = "1"; then
+  AC_DEFINE_UNQUOTED(GDAL_HAVE_XLOCALE_H, 1,
+            [Define if you have the <xlocale.h> header file.])
+fi
 
 AC_MSG_CHECKING([for uselocale])
 AC_LANG_PUSH(C++)
@@ -877,19 +860,12 @@ dnl ---------------------------------------------------------------------------
 
 AC_ARG_WITH(rename_internal_libtiff_symbols,[  --with-rename-internal-libtiff-symbols[=ARG] Prefix internal libtiff symbols with gdal_ (ARG=yes/no)],,)
 
-if test "$HAVE_HIDE_INTERNAL_SYMBOLS" = "yes" ; then
-    with_rename_internal_libtiff_symbols=yes
-    if test "x$with_rename_internal_libtiff_symbols" = "x$no"; then
-        with_rename_internal_libtiff_symbols=no
-    fi
-else
-    with_rename_internal_libtiff_symbols=no
-    if test "x$with_rename_internal_libtiff_symbols" = "x$yes" -o "x$with_rename_internal_libtiff_symbols" = "x"; then
-        with_rename_internal_libtiff_symbols=yes
-    fi
+RENAME_INTERNAL_LIBTIFF_SYMBOLS=no
+if test "x$with_rename_internal_libtiff_symbols" = "xyes" -o "x$with_rename_internal_libtiff_symbols" = "x"; then
+  RENAME_INTERNAL_LIBTIFF_SYMBOLS=yes
 fi
 
-AC_SUBST(RENAME_INTERNAL_LIBTIFF_SYMBOLS,$with_rename_internal_libtiff_symbols)
+AC_SUBST(RENAME_INTERNAL_LIBTIFF_SYMBOLS,$RENAME_INTERNAL_LIBTIFF_SYMBOLS)
 
 dnl ---------------------------------------------------------------------------
 dnl Check if user requests renaming internal libgeotiff symbols
@@ -897,19 +873,12 @@ dnl ---------------------------------------------------------------------------
 
 AC_ARG_WITH(rename_internal_libgeotiff_symbols,[  --with-rename-internal-libgeotiff-symbols[=ARG] Prefix internal libgeotiff symbols with gdal_ (ARG=yes/no)],,)
 
-if test "$HAVE_HIDE_INTERNAL_SYMBOLS" = "yes" ; then
-    with_rename_internal_libgeotiff_symbols=yes
-    if test "x$with_rename_internal_libgeotiff_symbols" = "x$no"; then
-        with_rename_internal_libgeotiff_symbols=no
-    fi
-else
-    with_rename_internal_libgeotiff_symbols=no
-    if test "x$with_rename_internal_libgeotiff_symbols" = "x$yes" -o "x$with_rename_internal_libgeotiff_symbols" = "x"; then
-        with_rename_internal_libgeotiff_symbols=yes
-    fi
+RENAME_INTERNAL_LIBGEOTIFF_SYMBOLS=no
+if test "x$with_rename_internal_libgeotiff_symbols" = "xyes" -o "x$with_rename_internal_libgeotiff_symbols" = "x"; then
+   RENAME_INTERNAL_LIBGEOTIFF_SYMBOLS=yes
 fi
 
-AC_SUBST(RENAME_INTERNAL_LIBGEOTIFF_SYMBOLS,$with_rename_internal_libgeotiff_symbols)
+AC_SUBST(RENAME_INTERNAL_LIBGEOTIFF_SYMBOLS,$RENAME_INTERNAL_LIBGEOTIFF_SYMBOLS)
 
 dnl ---------------------------------------------------------------------------
 dnl Check if user requests renaming internal shapelib symbols
@@ -917,18 +886,11 @@ dnl ---------------------------------------------------------------------------
 
 AC_ARG_WITH(rename_internal_shapelib_symbols,[  --with-rename-internal-shapelib-symbols[=ARG] Prefix internal shapelib symbols with gdal_ (ARG=yes/no)],,)
 
-if test "$HAVE_HIDE_INTERNAL_SYMBOLS" = "yes" ; then
-    with_rename_internal_shapelib_symbols=yes
-    if test "x$with_rename_internal_shapelib_symbols" = "x$no"; then
-        with_rename_internal_shapelib_symbols=no
-    fi
-else
-    with_rename_internal_shapelib_symbols=no
-    if test "x$with_rename_internal_shapelib_symbols" = "x$yes" -o "x$with_rename_internal_shapelib_symbols" = "x"; then
-        with_rename_internal_shapelib_symbols=yes
-    fi
+RENAME_INTERNAL_SHAPELIB_SYMBOLS=no
+if test "x$with_rename_internal_shapelib_symbols" = "xyes" -o "x$with_rename_internal_shapelib_symbols" = "x"; then
+    RENAME_INTERNAL_SHAPELIB_SYMBOLS=yes
 fi
-AC_SUBST(RENAME_INTERNAL_SHAPELIB_SYMBOLS,$with_rename_internal_shapelib_symbols)
+AC_SUBST(RENAME_INTERNAL_SHAPELIB_SYMBOLS,$RENAME_INTERNAL_SHAPELIB_SYMBOLS)
 
 
 dnl ---------------------------------------------------------------------------
@@ -1322,8 +1284,18 @@ if test "$JPEG_SETTING" != "no" ; then
   OPT_GDAL_FORMATS="jpeg $OPT_GDAL_FORMATS"
 fi
 
+dnl ---------------------------------------------------------------------------
+dnl Check if user requests renaming internal libjpeg symbols
+dnl ---------------------------------------------------------------------------
 
+AC_ARG_WITH(rename_internal_libjpeg_symbols,[  --with-rename-internal-libjpeg-symbols[=ARG] Prefix internal libjpeg symbols with gdal_ (ARG=yes/no)],,)
 
+RENAME_INTERNAL_LIBJPEG_SYMBOLS=no
+if test "x$with_rename_internal_libjpeg_symbols" = "xyes" -o "x$with_rename_internal_libjpeg_symbols" = "x"; then
+    RENAME_INTERNAL_LIBJPEG_SYMBOLS=yes
+fi
+
+AC_SUBST(RENAME_INTERNAL_LIBJPEG_SYMBOLS,$RENAME_INTERNAL_LIBJPEG_SYMBOLS)
 
 dnl ---------------------------------------------------------------------------
 dnl Select a libtiff library to use.
@@ -1766,7 +1738,7 @@ OGRFORMATS_DISABLED=
 AC_DEFUN([INTERNAL_FORMATS],[aaigrid adrg aigrid airsar arg blx bmp bsb cals ceos ceos2 coasp cosar ctg dimap dted elas envisat ers esric fit gff gsg gxf hf2 idrisi ilwis ingr iris iso8211 jaxapalsar jdem kmlsuperoverlay l1b leveller map mrf msgn ngsgeoid nitf northwood pds prf r raw rmf rs2 safe saga sdts sentinel2 sgi sigdem srtmhgt stacit stacta terragen tga til tsx usgsdem xpm xyz zarr zmap])
 AC_DEFUN([INTERNAL_OPT_FORMATS],[grib ozi pdf rik])
 AC_DEFUN([INTERNAL_DRIVERS],[arcgen avc cad csv dgn dxf edigeo flatgeobuf geoconcept georss gml gmt gpsbabel gpx gtm jml mapml mvt ntf openfilegdb pgdump rec s57 selafin shape svg sxf tiger vdv wasp])dnl
-AC_DEFUN([CURL_FORMATS],[eeda plmosaic rda wcs wms wmts daas ogcapi])dnl
+AC_DEFUN([CURL_FORMATS],[eeda plmosaic wcs wms wmts daas ogcapi])dnl
 AC_DEFUN([CURL_DRIVERS],[amigocloud carto cloudant couchdb csw elastic ngw plscenes wfs])dnl
 AC_DEFUN([SQLITE_FORMATS],[rasterlite mbtiles])dnl
 AC_DEFUN([SQLITE_DRIVERS],[gpkg vfk osm])dnl
@@ -2266,6 +2238,19 @@ if test "$PNG_SETTING" != "no" ; then
   	GDALFORMATS_ENABLED="$GDALFORMATS_ENABLED grib"
   fi
 fi
+
+dnl ---------------------------------------------------------------------------
+dnl Check if user requests renaming internal libpng symbols
+dnl ---------------------------------------------------------------------------
+
+AC_ARG_WITH(rename_internal_libpng_symbols,[  --with-rename-internal-libpng-symbols[=ARG] Prefix internal libpng symbols with gdal_ (ARG=yes/no)],,)
+
+RENAME_INTERNAL_PNG_SYMBOLS=no
+if test "x$with_rename_internal_libpng_symbols" = "xyes" -o "x$with_rename_internal_libpng_symbols" = "x"; then
+    RENAME_INTERNAL_PNG_SYMBOLS=yes
+fi
+
+AC_SUBST(RENAME_INTERNAL_PNG_SYMBOLS,$RENAME_INTERNAL_PNG_SYMBOLS)
 
 dnl ---------------------------------------------------------------------------
 dnl Enable DDS driver.
@@ -4431,6 +4416,43 @@ AC_SUBST([HAVE_RASTERLITE2], $HAVE_RASTERLITE2)
 AC_SUBST([RASTERLITE2_CFLAGS], $RASTERLITE2_CFLAGS)
 
 dnl ---------------------------------------------------------------------------
+dnl Check for PCRE2.
+dnl ---------------------------------------------------------------------------
+
+HAVE_PCRE2=no
+
+AC_ARG_WITH(pcre2,
+    [  --with-pcre2             Include libpcre2 support (REGEXP support for SQLite)],
+    ,,)
+
+if test "$with_pcre2" = "no"; then
+    AC_MSG_RESULT(disabled)
+    HAVE_PCRE2=no
+else
+    save_CPPFLAGS="$CPPFLAGS"
+    CPPFLAGS="$CPPFLAGS -DPCRE2_CODE_UNIT_WIDTH=8"
+    AC_CHECK_HEADERS([pcre2.h])
+    CPPFLAGS="$save_CPPFLAGS"
+    if test "$ac_cv_header_pcre2_h" = "no" ; then
+        if test "$with_pcre2" = "yes"; then
+            AC_MSG_ERROR([cannot find pcre2.h])
+        fi
+    else
+        AC_CHECK_LIB(pcre2-8,pcre2_compile_8,HAVE_PCRE2=yes,HAVE_PCRE2=no,)
+        if test "$HAVE_PCRE2" = "yes" ; then
+            HAVE_PCRE2=yes
+            LIBS="$LIBS -lpcre2-8"
+        else
+            if test "$with_pcre2" = "yes"; then
+                AC_MSG_ERROR([cannot find libpcre2])
+            fi
+        fi
+    fi
+fi
+
+AC_SUBST(HAVE_PCRE2)
+
+dnl ---------------------------------------------------------------------------
 dnl Check for PCRE.
 dnl ---------------------------------------------------------------------------
 
@@ -4443,7 +4465,7 @@ AC_ARG_WITH(pcre,
 if test "$with_pcre" = "no"; then
     AC_MSG_RESULT(disabled)
     HAVE_PCRE=no
-else
+elif test "$HAVE_PCRE2" = "no"; then
     AC_CHECK_HEADERS([pcre.h])
     if test "$ac_cv_header_pcre_h" = "no" ; then
         if test "$with_pcre" = "yes"; then
@@ -4645,42 +4667,43 @@ if test "$with_qhull" = "no" ; then
 
 elif test "$with_qhull" = "yes" -o "$with_qhull" = "" ; then
 
-  # Only qhull 2012 is reliable on certain datasets. Older Ubuntu have
-  # qhull/qhull.h
-  AC_CHECK_HEADERS([qhull/libqhull.h])
-  if test "$ac_cv_header_qhull_libqhull_h" = "yes"; then
-    AC_CHECK_LIB(qhull,qh_new_qhull,QHULL_SETTING=yes,QHULL_SETTING=no,)
-    if test "$QHULL_SETTING" = "yes"; then
-        QHULL_SETTING=external
-        QHULL_INCLUDE_SUBDIR_IS_LIBQHULL=0
-        LIBS="-lqhull $LIBS"
-    fi
-  fi
-  AC_CHECK_HEADERS([libqhull/libqhull.h])
-  if test "$ac_cv_header_libqhull_libqhull_h" = "yes"; then
-    AC_CHECK_LIB(qhull,qh_new_qhull,QHULL_SETTING=yes,QHULL_SETTING=no,)
-    if test "$QHULL_SETTING" = "yes"; then
-        QHULL_SETTING=external
-        QHULL_INCLUDE_SUBDIR_IS_LIBQHULL=1
-        LIBS="-lqhull $LIBS"
-    fi
+  AC_ARG_WITH(qhull_pkgname,[  --with-qhull-pkgname[=ARG]     pkg-config name of the reentrant qhull library, typically qhull_r (default) or qhullstatic_r],,)
+
+  if test "x$with_qhull_pkgname" = "x" ; then
+    with_qhull_pkgname=qhull_r
   fi
 
-  if test "$QHULL_SETTING" = "no" ; then
-    if test "$with_qhull" = "yes"; then
+  PKG_PROG_PKG_CONFIG([0.21])
+  PKG_CHECK_MODULES([QHULL],[$with_qhull_pkgname], [HAVE_QHULL=yes], [HAVE_QHULL=no])
+
+  dnl First try with pkg-config
+  if test "$HAVE_QHULL" = "yes" ; then
+    QHULL_SETTING=external
+    CFLAGS="$CFLAGS $QHULL_CFLAGS"
+    LIBS="$LIBS $QHULL_LIBS"
+  else
+    AC_CHECK_HEADERS([libqhull_r/libqhull_r.h])
+    if test "$ac_cv_header_libqhull_r_libqhull_r_h" = "yes"; then
+      AC_CHECK_LIB(qhull_r,qh_new_qhull,QHULL_SETTING=yes,QHULL_SETTING=no,)
+      if test "$QHULL_SETTING" = "yes"; then
+        QHULL_SETTING=external
+        LIBS="-lqhull_r $LIBS"
+      fi
+    fi
+
+    if test "$QHULL_SETTING" = "no" ; then
+      if test "$with_qhull" = "yes"; then
         AC_MSG_ERROR([--with-qhull requested, but library not found!])
-    else
+      else
         QHULL_SETTING=internal
-        QHULL_INCLUDE_SUBDIR_IS_LIBQHULL=1
+      fi
     fi
   fi
 else
   QHULL_SETTING=internal
-  QHULL_INCLUDE_SUBDIR_IS_LIBQHULL=1
 fi
 
 AC_SUBST([QHULL_SETTING],$QHULL_SETTING)
-AC_SUBST([QHULL_INCLUDE_SUBDIR_IS_LIBQHULL],$QHULL_INCLUDE_SUBDIR_IS_LIBQHULL)
 
 dnl ---------------------------------------------------------------------------
 dnl Check if opencl library is available.
@@ -5678,7 +5701,7 @@ if test "$with_brunsli" != "" -a "$with_brunsli" != "no" ; then
   BRUNSLI_ENABLED="yes"
   AC_SUBST(BRUNSLI_ENABLED, $BRUNSLI_ENABLED)
   AC_SUBST(BRUNSLI_INCLUDE, -I$prefix/include)
-  AC_SUBST(BRUNSLI_LIB, "-lbrunslicommon -lbrunslienc -lbrunslidec -lbrotlicommon -lbrotlienc -lbrotlidec")
+  AC_SUBST(BRUNSLI_LIB, "-lbrunslienc-c -lbrunslidec-c")
 fi
 
 dnl ---------------------------------------------------------------------------
@@ -6031,6 +6054,10 @@ else
     saved_LIBS="$LIBS"
     LIBS="$EXR_LIBS"
     AC_CHECK_LIB(IlmImf,ImfTiledInputReadTile, [HAVE_EXR=yes], [HAVE_EXR=no])
+    if test "$HAVE_EXR" = "no"; then
+      dnl Try with OpenEXR >= 3 name
+      AC_CHECK_LIB(OpenEXR,ImfTiledInputReadTile, [HAVE_EXR=yes], [HAVE_EXR=no])
+    fi
     LIBS="$saved_LIBS"
 
     if test "$HAVE_EXR" = "yes"; then
@@ -6108,6 +6135,11 @@ else
 
     if test "$HAVE_JXL" = "yes"; then
         LIBS="$JXL_LIBS $LIBS"
+
+        AC_CHECK_LIB(jxl,JxlEncoderFrameSettingsSetOption, [HAVE_JxlEncoderFrameSettingsSetOption=yes], [HAVE_JxlEncoderFrameSettingsSetOption=no])
+        if test "$HAVE_JxlEncoderFrameSettingsSetOption" = "yes"; then
+            JXL_CFLAGS="$JXL_CFLAGS -DHAVE_JxlEncoderFrameSettingsSetOption"
+        fi
     fi
   fi
 fi
@@ -6247,6 +6279,7 @@ LOC_MSG([  OpenJPEG support:          ${HAVE_OPENJPEG}])
 LOC_MSG([  PCIDSK support:            ${PCIDSK_SETTING}])
 LOC_MSG([  PCRaster support:          ${PCRASTER_SETTING}])
 LOC_MSG([  PCRE support:              ${HAVE_PCRE}])
+LOC_MSG([  PCRE2 support:             ${HAVE_PCRE2}])
 LOC_MSG([  PDFium support:            ${HAVE_PDFIUM}])
 LOC_MSG([  Podofo support:            ${HAVE_PODOFO}])
 LOC_MSG([  Poppler support:           ${HAVE_POPPLER}])
@@ -6315,3 +6348,7 @@ fi
 if test "$HAVE_TEIGHA" = "yes" -a "$ECW_54" = "yes"; then
     AC_MSG_WARN([Both Teigha SDK and ECW SDK >= 5.4 found. This was found to cause crashes in ECW driver.])
 fi
+
+AC_MSG_NOTICE([])
+AC_MSG_NOTICE([])
+AC_MSG_WARN([Starting with GDAL 3.5, the autoconf build system is deprecated in favor of the CMake build system. The autoconf build system will be completely removed in GDAL 3.6])

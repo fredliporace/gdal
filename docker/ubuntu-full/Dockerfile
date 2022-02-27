@@ -3,7 +3,7 @@
 
 # This file is available at the option of the licensee under:
 # Public domain
-# or licensed under X/MIT (LICENSE.TXT) Copyright 2019 Even Rouault <even.rouault@spatialys.com>
+# or licensed under MIT (LICENSE.TXT) Copyright 2019 Even Rouault <even.rouault@spatialys.com>
 
 ARG BASE_IMAGE=ubuntu:20.04
 ARG TARGET_BASE_IMAGE=ubuntu:20.04
@@ -226,6 +226,8 @@ RUN if echo "$WITH_PDFIUM" | grep -Eiq "^(y(es)?|1|true)$"  ; then ( \
 
 # Build libjxl
 RUN . /buildscripts/bh-set-envvars.sh \
+    && apt-get update -y \
+    && apt-get install -y --fix-missing --no-install-recommends libgflags-dev${APT_ARCH_SUFFIX} \
     && git clone https://github.com/libjxl/libjxl.git --recursive \
     && cd libjxl \
     && mkdir build \

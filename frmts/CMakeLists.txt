@@ -1,12 +1,16 @@
-# CMake4GDAL project is distributed under X/MIT license. See accompanying file LICENSE.txt.
+# CMake4GDAL project is distributed under MIT license. See accompanying file LICENSE.txt.
 
 add_library(gdal_frmts OBJECT gdalallregister.cpp)
 include(GdalDriverHelper)
 include(CMakeDependentOption)
 
+# JPEG must be defined before GTiff
+gdal_dependent_format(jpeg "JPEG image format" "GDAL_USE_JPEG OR GDAL_USE_JPEG_INTERNAL")
+
 # base driver provide frmt core functions
 gdal_optional_format(raw "Raw formats:EOSAT FAST Format, FARSITE LCP and Vexcel MFF2 Image")
 gdal_format(iso8211 "iso8211 library")
+# JPEG must be defined before GTiff
 gdal_format(gtiff "GeoTIFF image format")
 set_package_properties(TIFF PROPERTIES PURPOSE "gdal_GTIFF: GeoTIFF image format")
 gdal_format(mem "Read/write data in Memory")
@@ -15,6 +19,11 @@ gdal_format(vrt "Virtual GDAL Datasets")
 add_subdirectory(derived)
 
 # default formats
+
+if (CMAKE_BUILD_TYPE MATCHES "Debug" OR GDAL_ENABLE_DRIVER_NULL)
+  gdal_optional_format(null "NULL dummy driver")
+endif ()
+
 gdal_format(hfa "Erdas Imagine .img")
 gdal_optional_format(sdts "SDTS translator")
 gdal_optional_format(nitf "National Imagery Transmission Format")
@@ -56,7 +65,7 @@ gdal_optional_format(r "R Object Data Store")
 gdal_optional_format(northwood "NWT_GRD/NWT_GRC -- Northwood/Vertical Mapper File Format")
 gdal_optional_format(saga "SAGA GIS Binary Driver")
 gdal_optional_format(xyz "ASCII Gridded XYZ")
-gdal_dependent_format(heif "HEIF" "HEIF_FOUND")
+gdal_dependent_format(heif "HEIF" "GDAL_USE_HEIF")
 gdal_optional_format(esric "ESRI compact cache")
 gdal_optional_format(hf2 "HF2/HFZ heightfield raster")
 gdal_optional_format(kmlsuperoverlay "")
@@ -81,25 +90,22 @@ gdal_optional_format(ogcapi "OGCAPI")
 
 # optional Formats
 gdal_optional_format(bsb "Maptech/NOAA BSB Nautical Chart Format")
-gdal_dependent_format(aigrid "Arc/Info Binary Grid Format" "OGR_ENABLE_AVC;OGR_ENABLE_SHAPE")
+gdal_dependent_format(aigrid "Arc/Info Binary Grid Format" "OGR_ENABLE_DRIVER_AVC")
 gdal_optional_format(arg "ARG: Azavea Raster Grid")
 gdal_optional_format(usgsdem "USGS ASCII DEM (and CDED)")
 gdal_optional_format(airsar "AirSAR Polarimetric Format")
 gdal_optional_format(ozi "OZF2/OZFX3 raster")
 gdal_optional_format(pcidsk "PCI Geomatics Database File")
-gdal_optional_format(rda "RDA (DigitalGlobe Raster Data Access)")
 gdal_optional_format(sigdem "Scaled Integer Gridded DEM .sigdem Driver")
-gdal_dependent_format(msg "Meteosat Second Generation" "MSG_FOUND") # FIXME: currently the build depend on copying the
-                                                                    # PublicDecompSDK in frmts/msg
+gdal_dependent_format(msg "Meteosat Second Generation" "GDAL_USE_PUBLICDECOMPWT")
 gdal_optional_format(rik "RIK -- Swedish Grid Maps")
 gdal_optional_format(stacit "STACIT")
 gdal_optional_format(pdf "Geospatial PDF") # write only if none of GDAL_USE_POPPLER, GDAL_USE_PODOFO or GDAL_USE_PDFIUM
                                            # is set
 
 # formats with external library dependency
-gdal_dependent_format(png "PNG image format" "GDAL_USE_PNG OR GDAL_USE_LIBPNG_INTERNAL")
-gdal_dependent_format(jpeg "JPEG image format" "GDAL_USE_JPEG OR GDAL_USE_LIBJPEG_INTERNAL")
-gdal_dependent_format(gif "Graphics Interchange Format" "GDAL_USE_GIF OR GDAL_USE_GIFLIB_INTERNAL")
+gdal_dependent_format(png "PNG image format" "GDAL_USE_PNG OR GDAL_USE_PNG_INTERNAL")
+gdal_dependent_format(gif "Graphics Interchange Format" "GDAL_USE_GIF OR GDAL_USE_GIF_INTERNAL")
 
 gdal_dependent_format(wcs "OGC Web Coverage Service" "GDAL_USE_CURL" SKIP_ADD_SUBDIRECTORY)
 gdal_dependent_format(http "HTTP driver" "GDAL_USE_CURL" SKIP_ADD_SUBDIRECTORY)
@@ -109,19 +115,19 @@ gdal_dependent_format(netcdf "NetCDF network Common Data Form" "GDAL_USE_NETCDF"
 gdal_optional_format(zarr "ZARR")
 gdal_dependent_format(eeda "Earth Engine Data API" "GDAL_USE_CURL")
 gdal_dependent_format(fits "FITS Driver" "GDAL_USE_CFITSIO")
-gdal_dependent_format(rasdaman "Rasdaman GDAL driver" "HAVE_RASDAMAN")
+gdal_dependent_format(rasdaman "Rasdaman GDAL driver" "GDAL_USE_RASDAMAN")
 gdal_dependent_format(hdf5 "Hierarchical Data Format Release 5 (HDF5)" "GDAL_USE_HDF5")
 gdal_dependent_format(plmosaic "PLMosaic (Planet Labs Mosaics API)" "GDAL_USE_CURL")
 gdal_dependent_format(wms "Web Map Services" "GDAL_USE_CURL")
-gdal_dependent_format(gta "Generic Tagged Arrays" "GTA_FOUND")
+gdal_dependent_format(gta "Generic Tagged Arrays" "GDAL_USE_GTA")
 gdal_dependent_format(webp "WebP" "GDAL_USE_WEBP")
 gdal_dependent_format(hdf4 "Hierarchical Data Format Release 4 (HDF4)" "GDAL_USE_HDF4")
-gdal_dependent_format(rasterlite "Rasterlite - Rasters in SQLite DB" "GDAL_USE_SQLITE3;OGR_ENABLE_SQLITE")
-gdal_dependent_format(mbtiles "MBTile" "GDAL_USE_SQLITE3;OGR_ENABLE_GPKG")
+gdal_dependent_format(rasterlite "Rasterlite - Rasters in SQLite DB" "GDAL_USE_SQLITE3;OGR_ENABLE_DRIVER_SQLITE")
+gdal_dependent_format(mbtiles "MBTile" "GDAL_USE_SQLITE3;OGR_ENABLE_DRIVER_GPKG")
 gdal_dependent_format(postgisraster "PostGIS Raster driver" "GDAL_USE_POSTGRESQL")
 gdal_dependent_format(dods "OPeNDAP Grid Client" "GDAL_USE_DAP")
-gdal_dependent_format(dds "DirectDraw Surface" "HAVE_CRNLIB")
-gdal_dependent_format(kea "Kea" "HAVE_KEA")
+gdal_dependent_format(dds "DirectDraw Surface" "GDAL_USE_CRNLIB")
+gdal_dependent_format(kea "Kea" "GDAL_USE_KEA;GDAL_USE_HDF5")
 gdal_dependent_format(openjpeg "JPEG2000 driver based on OpenJPEG library" "GDAL_USE_OPENJPEG" DRIVER_NAME_OPTION
                       "JP2OpenJPEG")
 gdal_dependent_format(jpegls "JPEG LS" "GDAL_USE_CHARLS")
@@ -130,11 +136,12 @@ gdal_dependent_format(jpeg2000 "JPEG2000 --- Implementation of the JPEG-2000 par
 gdal_dependent_format(tiledb "TileDB tiledb.io" "GDAL_USE_TILEDB")
 gdal_dependent_format(exr "EXR support via OpenEXR library" "GDAL_USE_OPENEXR")
 gdal_dependent_format(pcraster "PCRaster CSF 2.0 raster file driver" "GDAL_USE_LIBCSF OR GDAL_USE_LIBCSF_INTERNAL")
+gdal_dependent_format(rdb "RIEGL RDB Map Pixel (.mpx) driver" "rdb_FOUND")
 
 # for circulate dependency, grass is NOT always compiled in.
 gdal_dependent_format(grass "GRASS" "HAVE_GRASS")
-add_feature_info(gdal_GRASS GDAL_ENABLE_FRMT_GRASS "GRASS raster format")
-if (GDAL_ENABLE_FRMT_GRASS)
+add_feature_info(gdal_GRASS GDAL_ENABLE_DRIVER_GRASS "GRASS raster format")
+if (GDAL_ENABLE_DRIVER_GRASS)
   if (HAVE_GRASS AND HAVE_POSTGRESQL)
 
   else ()
@@ -144,26 +151,51 @@ endif ()
 
 # ######################################################################################################################
 # driver with proprietary libraries Kakadu software SDK
-gdal_dependent_format(jp2kak "JPEG-2000 (based on Kakadu)" "HAVE_KDU")
-gdal_dependent_format(jpipkak "JPIP Streaming" "HAVE_KDU")
+gdal_dependent_format(jp2kak "JPEG-2000 (based on Kakadu)" "GDAL_USE_KDU")
+gdal_dependent_format(jpipkak "JPIP Streaming" "GDAL_USE_KDU")
 # Luratech SDK
-gdal_dependent_format(jp2lura JP2LURA "HAVE_LURA")
+gdal_dependent_format(jp2lura "JPEG-2000 (based on Luratech)" "GDAL_USE_LURATECH")
 # ESRI ArcSDE C API SDK
 gdal_dependent_format(sde "ESRI ArcSDE Raster" "HAVE_SDE")
 # LizardTech's decoding software development kit (DSDK)
-gdal_dependent_format(mrsid "Multi-resolution Seamless Image Database" "HAVE_MRSID")
-gdal_dependent_format(mrsid_lidar "Multi-resolution Seamless Image Database - LiDAR support" "HAVE_MRSID")
-gdal_dependent_format(georaster "Oracle Spatial GeoRaster" "HAVE_ORACLE")
-gdal_dependent_format(ecw "ERDAS JPEG2000 (.jp2)" "HAVE_ECW")
+gdal_dependent_format(mrsid "Multi-resolution Seamless Image Database" "GDAL_USE_MRSID")
+# gdal_dependent_format(mrsid_lidar "Multi-resolution Seamless Image Database - LiDAR support" "HAVE_MRSID")
+gdal_dependent_format(georaster "Oracle Spatial GeoRaster" "GDAL_USE_ORACLE" DRIVER_NAME_OPTION GEOR)
+gdal_dependent_format(ecw "ERDAS JPEG2000 (.jp2)" "GDAL_USE_ECW")
 
 # Register all frmt drivers according to FRMT_<driver> flags
 gdal_standard_includes(gdal_frmts)
 add_dependencies(gdal_frmts generate_gdal_version_h)
 if (ENABLE_GNM)
   target_compile_definitions(gdal_frmts PRIVATE -DGNM_ENABLED)
+  target_include_directories(gdal_frmts PRIVATE $<TARGET_PROPERTY:gnm_frmts,SOURCE_DIR>)
 endif ()
 target_include_directories(
-  gdal_frmts PRIVATE $<TARGET_PROPERTY:gnm_frmts,SOURCE_DIR> $<TARGET_PROPERTY:gdal_vrt,SOURCE_DIR>
-                     $<TARGET_PROPERTY:ogrsf_generic,SOURCE_DIR> $<TARGET_PROPERTY:ogr_MEM,SOURCE_DIR>)
+  gdal_frmts PRIVATE $<TARGET_PROPERTY:gdal_vrt,SOURCE_DIR> $<TARGET_PROPERTY:ogrsf_generic,SOURCE_DIR>
+                     $<TARGET_PROPERTY:ogr_MEM,SOURCE_DIR>)
 target_sources(${GDAL_LIB_TARGET_NAME} PRIVATE $<TARGET_OBJECTS:gdal_frmts>)
 set_property(TARGET gdal_frmts PROPERTY POSITION_INDEPENDENT_CODE ${BUILD_SHARED_LIBS})
+
+# Special case for HTTP driver since it is included in the frmts/wcs/ directory We should ultimately make it a separate
+# frmts/http/ to clean up things.
+if (GDAL_ENABLE_DRIVER_HTTP AND NOT GDAL_ENABLE_DRIVER_HTTP_PLUGIN)
+  target_compile_definitions(gdal_frmts PRIVATE -DFRMT_http)
+endif ()
+
+# Install drivers.ini along with plugins
+
+# We request the TARGET_FILE_DIR of one of the plugins, since the PLUGIN_OUTPUT_DIR will not contain the \Release suffix
+# with MSVC generator
+get_property(PLUGIN_MODULES GLOBAL PROPERTY PLUGIN_MODULES)
+list(LENGTH PLUGIN_MODULES PLUGIN_MODULES_LENGTH)
+if (PLUGIN_MODULES_LENGTH GREATER_EQUAL 1)
+  list(GET PLUGIN_MODULES 0 FIRST_TARGET)
+  set(PLUGIN_OUTPUT_DIR "$<TARGET_FILE_DIR:${FIRST_TARGET}>")
+  file(READ ${CMAKE_CURRENT_SOURCE_DIR}/drivers.ini DRIVERS_INI_CONTENT)
+  file(
+    GENERATE
+    OUTPUT ${PLUGIN_OUTPUT_DIR}/drivers.ini
+    CONTENT ${DRIVERS_INI_CONTENT})
+endif ()
+
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/drivers.ini DESTINATION ${INSTALL_PLUGIN_DIR})
