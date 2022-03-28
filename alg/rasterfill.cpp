@@ -621,6 +621,21 @@ GDALFillNodata( GDALRasterBandH hTargetBand,
 /*      Figure out the most recent pixel for each column.               */
 /* -------------------------------------------------------------------- */
 
+        int iIndex = 0;
+        while(iIndex < nXSize - 1 && !pabyMask[iIndex] )
+        {
+          iIndex++;
+        }
+        int iXLeftBound = iIndex;
+
+        iIndex = nXSize - 1;
+        while(iIndex > iXLeftBound && !pabyMask[iIndex] )
+        {
+          iIndex--;
+        }
+        int iXRightBound = iIndex;
+        fprintf(stderr, "Left: %d, Right: %d\n", iXLeftBound, iXRightBound);
+
         for( int iX = 0; iX < nXSize; iX++ )
         {
             if( pabyMask[iX] )
@@ -628,7 +643,7 @@ GDALFillNodata( GDALRasterBandH hTargetBand,
                 pafThisValue[iX] = pafScanline[iX];
                 panThisY[iX] = iY;
             }
-            else if( iY <= dfMaxSearchDist + panLastY[iX] )
+            else if( iX > iXLeftBound && iX < iXRightBound && iY <= dfMaxSearchDist + panLastY[iX] )
             {
                 pafThisValue[iX] = pafLastValue[iX];
                 panThisY[iX] = panLastY[iX];
